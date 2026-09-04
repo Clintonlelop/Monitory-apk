@@ -19,12 +19,7 @@ class PreferenceManager(context: Context) {
     val lastSyncFlow: StateFlow<Long> = _lastSyncFlow.asStateFlow()
 
     fun getServerUrl(): String {
-        val raw = prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
-        if (raw.contains("10.0.2.2")) {
-            prefs.edit().putString(KEY_SERVER_URL, DEFAULT_SERVER_URL).apply()
-            return DEFAULT_SERVER_URL
-        }
-        return raw
+        return prefs.getString(KEY_SERVER_URL, "http://10.0.2.2:8080") ?: "http://10.0.2.2:8080"
     }
 
     fun getPublicWebUrl(): String {

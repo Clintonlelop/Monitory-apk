@@ -64,7 +64,7 @@
             android:name=".service.DeviceManagementService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync|connectedDevice" />
+            android:foregroundServiceType="dataSync" />
 
         <!-- Official Android NotificationListenerService -->
         <service

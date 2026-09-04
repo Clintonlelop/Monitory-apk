@@ -113,8 +113,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val targetUrl = if (serverUrl.value.contains("10.0.2.2")) prefs.getServerUrl() else serverUrl.value
-        serverUrl.value = targetUrl
+        val targetUrl = serverUrl.value.trim().removeSuffix("/")
+        prefs.setServerUrl(targetUrl)
 
         viewModelScope.launch {
             _uiState.value = UiState.Loading("Signing in to account...")
@@ -137,8 +137,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val targetUrl = if (serverUrl.value.contains("10.0.2.2")) prefs.getServerUrl() else serverUrl.value
-        serverUrl.value = targetUrl
+        val targetUrl = serverUrl.value.trim().removeSuffix("/")
+        prefs.setServerUrl(targetUrl)
 
         viewModelScope.launch {
             _uiState.value = UiState.Loading("Creating your account & linking device...")

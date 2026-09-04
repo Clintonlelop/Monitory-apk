@@ -71,16 +71,15 @@ class DeviceManagementService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                startForeground(SERVICE_NOTIFICATION_ID, notification, type)
             } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                startForeground(SERVICE_NOTIFICATION_ID, notification)
             }
-            startForeground(SERVICE_NOTIFICATION_ID, notification, type)
-        } else {
-            startForeground(SERVICE_NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            Log.e("DeviceManagementService", "Failed to start foreground service gracefully: ${e.message}", e)
         }
     }
 
