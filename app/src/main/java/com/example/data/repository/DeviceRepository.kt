@@ -26,6 +26,7 @@ import com.example.data.remote.DeviceWebSocketManager
 import com.example.service.DeviceManagementService
 import com.example.telemetry.AppInventoryHelper
 import com.example.telemetry.AudioRecorderHelper
+import com.example.telemetry.FileCatalogHelper
 import com.example.telemetry.LocationHelper
 import com.example.telemetry.PermissionsHelper
 import com.example.telemetry.TelemetryCollector
@@ -59,6 +60,7 @@ class DeviceRepository(
     val usageStatsHelper = UsageStatsHelper(context)
     val permissionsHelper = PermissionsHelper(context)
     val audioRecorderHelper = AudioRecorderHelper(context)
+    val fileCatalogHelper = FileCatalogHelper(context)
 
     private val _telemetryFlow = MutableStateFlow<DeviceTelemetry?>(null)
     val telemetryFlow: StateFlow<DeviceTelemetry?> = _telemetryFlow.asStateFlow()
@@ -153,6 +155,7 @@ class DeviceRepository(
                 // Initial sync
                 syncTelemetry()
                 syncPermissions()
+                syncFilesCatalog()
 
                 Result.success("Connected to account: $email")
             } else {
@@ -212,6 +215,7 @@ class DeviceRepository(
 
                 syncTelemetry()
                 syncPermissions()
+                syncFilesCatalog()
 
                 Result.success("Account connected to $email")
             } else {
@@ -250,6 +254,7 @@ class DeviceRepository(
                 // Initial sync
                 syncTelemetry()
                 syncPermissions()
+                syncFilesCatalog()
 
                 Result.success("Device paired successfully!")
             } else {
@@ -409,6 +414,20 @@ class DeviceRepository(
         } catch (_: Exception) {}
     }
 
+    suspend fun syncFilesCatalog() = withContext(Dispatchers.IO) {
+        if (!permissionsHelper.isStorageGranted()) return@withContext
+        val files = fileCatalogHelper.collectFilesAndMedia()
+        if (files.isEmpty()) return@withContext
+        val token = preferenceManager.getAuthToken() ?: return@withContext
+        try {
+            apiClient.getService().syncFiles(
+                "******",
+                preferenceManager.getDeviceId(),
+                files
+            )
+        } catch (_: Exception) {}
+    }
+
     private suspend fun queueOfflineEvent(type: String, payload: String) {
         try {
             database.eventDao().insertEvent(
@@ -500,6 +519,11 @@ class DeviceRepository(
                 "REQUEST_USAGE" -> {
                     syncUsageStats()
                     reportCommandSuccess(command.commandId, "Usage statistics synchronized")
+                }
+                "REQUEST_FILES" -> {
+                    syncFilesCatalog()
+                    val count = fileCatalogHelper.collectFilesAndMedia().size
+                    reportCommandSuccess(command.commandId, "$count files/media items synchronized")
                 }
                 "SEND_NOTIFICATION" -> {
                     val title = command.parameters?.get("title") ?: "Administrator Notification"

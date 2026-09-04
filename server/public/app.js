@@ -12,6 +12,7 @@ let pairingTimer = null;
 let notificationOffset = 0;
 let hasMoreNotifications = true;
 const notificationPageSize = 30;
+let currentMediaType = 'images';
 
 // DOM Elements
 const authModal = document.getElementById('auth-modal');
@@ -121,6 +122,7 @@ function initDashboard() {
   loadAuditLogs();
   loadAlerts();
   setupNotificationFilters();
+  setupFilesAndMediaFilters();
 }
 
 // Navigation
@@ -209,6 +211,11 @@ function handleWsMessage(msg) {
   } else if (msg.type === 'COMMAND_STATUS_UPDATED') {
     if (currentDevice && currentDevice.id === msg.deviceId) {
       loadDeviceCommands(currentDevice.id);
+    }
+  } else if (msg.type === 'DEVICE_FILES_SYNCED') {
+    if (currentDevice && currentDevice.id === msg.deviceId) {
+      loadDeviceFiles(currentDevice.id);
+      loadDeviceMedia(currentDevice.id, currentMediaType);
     }
   } else if (msg.type === 'DEVICE_PAIRED') {
     loadDevices();
@@ -327,6 +334,8 @@ window.openDeviceDetail = async function(deviceId) {
     loadDeviceLocations(deviceId);
     notificationOffset = 0;
     loadDeviceNotifications(deviceId, true);
+    loadDeviceFiles(deviceId);
+    loadDeviceMedia(deviceId, currentMediaType);
     loadDeviceApps(deviceId);
     loadDeviceUsage(deviceId);
     loadDeviceCommands(deviceId);
@@ -574,6 +583,126 @@ function appendNotificationFeed(n) {
     <div style="font-size: 0.72rem; color: #818cf8; margin-top: 2px;">${new Date().toLocaleTimeString()}</div>
   `;
   feed.prepend(item);
+}
+
+function setupFilesAndMediaFilters() {
+  const filesSearch = document.getElementById('files-search-input');
+  const filesType = document.getElementById('files-type-filter');
+  const requestFilesBtn = document.getElementById('btn-request-files');
+
+  if (filesSearch) {
+    filesSearch.addEventListener('input', () => {
+      if (!currentDevice) return;
+      loadDeviceFiles(currentDevice.id);
+    });
+  }
+
+  if (filesType) {
+    filesType.addEventListener('change', () => {
+      if (!currentDevice) return;
+      loadDeviceFiles(currentDevice.id);
+      loadDeviceMedia(currentDevice.id, filesType.value === 'all' ? 'all' : filesType.value);
+    });
+  }
+
+  if (requestFilesBtn) {
+    requestFilesBtn.addEventListener('click', () => {
+      if (currentDevice) dispatchCommand(currentDevice.id, 'REQUEST_FILES');
+    });
+  }
+
+  document.querySelectorAll('.media-filter-btn').forEach((button) => {
+    button.addEventListener('click', () => {
+      currentMediaType = button.getAttribute('data-type') || 'images';
+      if (currentDevice) loadDeviceMedia(currentDevice.id, currentMediaType);
+    });
+  });
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value <= 0) return '--';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let idx = 0;
+  while (size >= 1024 && idx < units.length - 1) {
+    size /= 1024;
+    idx += 1;
+  }
+  return `${size.toFixed(size >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
+async function loadDeviceFiles(deviceId) {
+  const search = document.getElementById('files-search-input')?.value?.trim() || '';
+  const type = document.getElementById('files-type-filter')?.value || 'all';
+  const params = new URLSearchParams({
+    search,
+    type,
+    limit: '100',
+    sortBy: 'modified',
+    sortOrder: 'desc'
+  });
+
+  try {
+    const res = await fetch(`/api/devices/${deviceId}/files?${params.toString()}`, {
+      headers: { Authorization: 'Bearer ' + authToken }
+    });
+    if (!res.ok) return;
+    const files = await res.json();
+    const tbody = document.getElementById('files-table-body');
+    if (!tbody) return;
+    if (!files.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="text-center">No matching files found.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = files.map(file => `
+      <tr>
+        <td><b>${escapeHtml(file.file_name || '')}</b></td>
+        <td style="font-size:0.8rem;color:var(--text-muted)">${escapeHtml(file.file_path || '')}</td>
+        <td>${escapeHtml(file.mime_type || '--')}</td>
+        <td>${formatBytes(file.file_size)}</td>
+        <td>${new Date(file.created_at).toLocaleString()}</td>
+      </tr>
+    `).join('');
+  } catch (_) {}
+}
+
+async function loadDeviceMedia(deviceId, mediaType = 'images') {
+  const type = mediaType === 'images' || mediaType === 'videos' ? mediaType : 'all';
+  const params = new URLSearchParams({
+    type,
+    limit: '80',
+    sortBy: 'modified',
+    sortOrder: 'desc'
+  });
+
+  try {
+    const res = await fetch(`/api/devices/${deviceId}/files?${params.toString()}`, {
+      headers: { Authorization: 'Bearer ' + authToken }
+    });
+    if (!res.ok) return;
+    const files = await res.json();
+    const media = files.filter(file => String(file.mime_type || '').startsWith('image/') || String(file.mime_type || '').startsWith('video/'));
+    const grid = document.getElementById('media-grid');
+    if (!grid) return;
+    if (!media.length) {
+      grid.innerHTML = '<div class="empty-state">No media found for this filter.</div>';
+      return;
+    }
+    grid.innerHTML = media.map(file => {
+      const mime = String(file.mime_type || '');
+      const icon = mime.startsWith('video/') ? '🎬' : '🖼️';
+      return `
+        <div class="media-card">
+          <div class="media-thumb">${icon}</div>
+          <div class="media-meta">
+            <div class="media-title">${escapeHtml(file.file_name || 'Media file')}</div>
+            <div class="media-sub">${formatBytes(file.file_size)} • ${new Date(file.created_at).toLocaleDateString()}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (_) {}
 }
 
 // Applications Inventory

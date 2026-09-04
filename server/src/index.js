@@ -864,6 +864,114 @@ app.get('/api/devices/:id/usage', verifyToken, protectedRouteLimit, ensureUserOw
 });
 
 // ==========================================
+// FILES & MEDIA CATALOG
+// ==========================================
+app.post('/api/devices/:id/files/sync', verifyDeviceToken, protectedRouteLimit, async (req, res) => {
+  const { id } = req.params;
+  const files = req.body;
+  if (!Array.isArray(files)) {
+    return res.status(400).json({ error: 'Expected an array of files' });
+  }
+
+  if (db.isPostgres()) {
+    await db.query('DELETE FROM files WHERE device_id = $1', [id]);
+    for (const file of files.slice(0, 500)) {
+      await db.query(
+        `INSERT INTO files (device_id, file_name, file_path, file_size, mime_type, is_directory, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, TO_TIMESTAMP($7 / 1000.0))`,
+        [
+          id,
+          file.name || 'Unknown',
+          file.path || file.name || 'Unknown',
+          Number(file.size || 0),
+          file.mimeType || null,
+          Boolean(file.isDirectory),
+          Number(file.modifiedAt || Date.now())
+        ]
+      );
+    }
+  } else {
+    const store = db.getMemoryStore();
+    store.files = store.files.filter(entry => entry.device_id !== id);
+    for (const file of files.slice(0, 500)) {
+      store.files.push({
+        id: Date.now() + Math.floor(Math.random() * 100000),
+        device_id: id,
+        file_name: file.name || 'Unknown',
+        file_path: file.path || file.name || 'Unknown',
+        file_size: Number(file.size || 0),
+        mime_type: file.mimeType || null,
+        is_directory: Boolean(file.isDirectory),
+        created_at: new Date(Number(file.modifiedAt || Date.now()))
+      });
+    }
+  }
+
+  wsManager.broadcastToDashboards({
+    type: 'DEVICE_FILES_SYNCED',
+    deviceId: id,
+    count: Math.min(files.length, 500),
+    timestamp: Date.now()
+  });
+  res.json({ success: true, count: Math.min(files.length, 500) });
+});
+
+app.get('/api/devices/:id/files', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
+  const { id } = req.params;
+  const search = (req.query.search || '').trim();
+  const type = (req.query.type || 'all').trim().toLowerCase();
+  const sortBy = (req.query.sortBy || 'modified').trim().toLowerCase();
+  const sortOrder = (req.query.sortOrder || 'desc').trim().toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+  if (db.isPostgres()) {
+    let query = 'SELECT * FROM files WHERE device_id = $1';
+    const params = [id];
+    let nextParam = 2;
+
+    if (search) {
+      query += ` AND (file_name ILIKE $${nextParam} OR file_path ILIKE $${nextParam})`;
+      params.push(`%${search}%`);
+      nextParam += 1;
+    }
+    if (type === 'images') {
+      query += " AND mime_type ILIKE 'image/%'";
+    } else if (type === 'videos') {
+      query += " AND mime_type ILIKE 'video/%'";
+    } else if (type === 'downloads') {
+      query += " AND file_path ILIKE '%Download%'";
+    }
+
+    const sortColumn = sortBy === 'size' ? 'file_size' : 'created_at';
+    query += ` ORDER BY ${sortColumn} ${sortOrder} LIMIT $${nextParam} OFFSET $${nextParam + 1}`;
+    params.push(limit, offset);
+    const result = await db.query(query, params);
+    return res.json(result.rows);
+  }
+
+  let list = db.getMemoryStore().files.filter(file => file.device_id === id);
+  if (search) {
+    const normalized = search.toLowerCase();
+    list = list.filter(
+      file =>
+        String(file.file_name || '').toLowerCase().includes(normalized) ||
+        String(file.file_path || '').toLowerCase().includes(normalized)
+    );
+  }
+  if (type === 'images') list = list.filter(file => String(file.mime_type || '').startsWith('image/'));
+  if (type === 'videos') list = list.filter(file => String(file.mime_type || '').startsWith('video/'));
+  if (type === 'downloads') list = list.filter(file => String(file.file_path || '').toLowerCase().includes('download'));
+
+  list = list.sort((a, b) => {
+    const left = sortBy === 'size' ? Number(a.file_size || 0) : new Date(a.created_at).getTime();
+    const right = sortBy === 'size' ? Number(b.file_size || 0) : new Date(b.created_at).getTime();
+    return sortOrder === 'ASC' ? left - right : right - left;
+  });
+  return res.json(list.slice(offset, offset + limit));
+});
+
+// ==========================================
 // PERMISSIONS
 // ==========================================
 app.put('/api/devices/:id/permissions', verifyDeviceToken, protectedRouteLimit, async (req, res) => {

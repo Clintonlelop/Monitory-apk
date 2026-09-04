@@ -68,6 +68,16 @@ data class UsageData(
 )
 
 @JsonClass(generateAdapter = true)
+data class FileEntryData(
+    val name: String,
+    val path: String,
+    val size: Long,
+    val mimeType: String?,
+    val isDirectory: Boolean = false,
+    val modifiedAt: Long
+)
+
+@JsonClass(generateAdapter = true)
 data class RemoteCommand(
     val commandId: String,
     val deviceId: String,
@@ -149,4 +159,3 @@ data class RegisterDeviceRequest(
     val sdkVersion: Int = 34,
     val appVersion: String = "1.0"
 )
-

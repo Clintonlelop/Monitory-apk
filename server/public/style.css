@@ -710,7 +710,7 @@ body {
   margin-bottom: 6px;
 }
 
-input[type="text"], input[type="password"] {
+input[type="text"], input[type="password"], input[type="date"], select {
   width: 100%;
   padding: 10px 14px;
   background: var(--bg-surface);
@@ -722,7 +722,7 @@ input[type="text"], input[type="password"] {
   transition: border-color 0.2s;
 }
 
-input[type="text"]:focus, input[type="password"]:focus {
+input[type="text"]:focus, input[type="password"]:focus, input[type="date"]:focus, select:focus {
   border-color: var(--primary);
 }
 
@@ -742,6 +742,46 @@ input[type="text"]:focus, input[type="password"]:focus {
   margin-top: 12px;
   display: flex;
   justify-content: flex-end;
+}
+
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+}
+
+.media-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.media-thumb {
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.15), rgba(14, 165, 233, 0.15));
+  font-size: 2rem;
+}
+
+.media-meta {
+  padding: 10px 12px;
+}
+
+.media-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media-sub {
+  color: var(--text-muted);
+  font-size: 0.76rem;
 }
 
 .auth-hint {

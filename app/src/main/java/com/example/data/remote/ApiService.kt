@@ -6,6 +6,7 @@ import com.example.data.model.AuthResponse
 import com.example.data.model.CommandStatusUpdate
 import com.example.data.model.DevicePermissionsStatus
 import com.example.data.model.DeviceTelemetry
+import com.example.data.model.FileEntryData
 import com.example.data.model.LocationData
 import com.example.data.model.NotificationData
 import com.example.data.model.PairingRequest
@@ -84,6 +85,13 @@ interface ApiService {
         @Header("Authorization") token: String,
         @Path("id") deviceId: String,
         @Body usage: List<UsageData>
+    ): Response<Unit>
+
+    @POST("/api/devices/{id}/files/sync")
+    suspend fun syncFiles(
+        @Header("Authorization") token: String,
+        @Path("id") deviceId: String,
+        @Body files: List<FileEntryData>
     ): Response<Unit>
 
     @PUT("/api/devices/{id}/permissions")

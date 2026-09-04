@@ -170,6 +170,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repo.syncTelemetry()
             repo.syncPermissions()
             repo.syncLocation()
+            repo.syncFilesCatalog()
             _uiState.value = UiState.Success("Device Activated & Synced Successfully!")
             _currentScreen.value = Screen.Dashboard
         }
@@ -200,6 +201,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val success = repo.syncTelemetry()
             repo.syncPermissions()
             repo.syncLocation()
+            repo.syncFilesCatalog()
             if (success) {
                 _uiState.value = UiState.Success("Synchronization complete")
             } else {
