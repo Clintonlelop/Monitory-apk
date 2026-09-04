@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="54"
+        android:pivotY="54">
+        <!-- Shield Base -->
+        <path
+            android:fillColor="#38BDF8"
+            android:pathData="M54,22 C64,22 74,27 76,34 C76,52 64,68 54,74 C44,68 32,52 32,34 C34,27 44,22 54,22 Z" />
+        <!-- Inner Shield Accent -->
+        <path
+            android:fillColor="#0284C7"
+            android:pathData="M54,25 C62,25 71,29 73,35 C73,50 63,64 54,70 C54,25 54,25 54,25 Z" />
+        <!-- Smartphone Silhouette in center -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M46,33 L62,33 C63.6,33 65,34.4 65,36 L65,58 C65,59.6 63.6,61 62,61 L46,61 C44.4,61 43,59.6 43,58 L43,36 C43,34.4 44.4,33 46,33 Z" />
+        <!-- Phone Screen -->
+        <path
+            android:fillColor="#0F172A"
+            android:pathData="M45,37 L63,37 L63,54 L45,54 Z" />
+        <!-- Screen Management Pulse / Check -->
+        <path
+            android:fillColor="#22C55E"
+            android:pathData="M50,45 L53,48 L58,42 L59.5,43.5 L53,50 L48.5,46.5 Z" />
+        <!-- Home Button Dot -->
+        <path
+            android:fillColor="#94A3B8"
+            android:pathData="M54,58 m-1,0 a1,1 0 1,1 2,0 a1,1 0 1,1 -2,0" />
+        <!-- Signal / Connection Nodes at bottom -->
+        <path
+            android:fillColor="#38BDF8"
+            android:pathData="M54,78 m-3,0 a3,3 0 1,1 6,0 a3,3 0 1,1 -6,0" />
+        <path
+            android:fillColor="#818CF8"
+            android:pathData="M43,84 m-2.5,0 a2.5,2.5 0 1,1 5,0 a2.5,2.5 0 1,1 -5,0" />
+        <path
+            android:fillColor="#818CF8"
+            android:pathData="M65,84 m-2.5,0 a2.5,2.5 0 1,1 5,0 a2.5,2.5 0 1,1 -5,0" />
+        <!-- Connecting lines -->
+        <path
+            android:strokeColor="#6366F1"
+            android:strokeWidth="1.5"
+            android:pathData="M43,84 L54,78 L65,84 M54,74 L54,78" />
+    </group>
+</vector>

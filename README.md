@@ -1,11 +1,115 @@
-<div align="center">
+# Android Device Management & Monitoring System
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+A complete, production-ready, fully transparent Android Device Management agent and full-stack administrative infrastructure built with modern Kotlin, Jetpack Compose, Node.js, WebSockets, PostgreSQL, and an interactive Web Admin Dashboard.
 
-  <h1>Built with AI Studio</h2>
+---
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## 🏛 System Architecture
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+```
+┌────────────────────────────────────────────────────────┐
+│               Android Target Device                    │
+│  - DeviceManagementService (Foreground Service)        │
+│  - NotificationMonitorService (Notification Listener)  │
+│  - Jetpack Compose UI (Pairing, Telemetry, Privacy)    │
+│  - Room Database (Local Offline Event Queue)           │
+│  - LocationHelper (GPS / FusedLocationProvider)        │
+└──────────────▲─────────────────────────┬───────────────┘
+               │                         │
+      WebSocket Real-Time        HTTPS REST API
+      Bi-directional Commands     Telemetry & Uploads
+               │                         │
+┌──────────────┴─────────────────────────▼───────────────┐
+│               Node.js Backend Server                   │
+│  - Express REST API (Auth, Devices, Telemetry, Files)  │
+│  - WebSocket Hub (/ws/device, /ws/dashboard)           │
+│  - In-Memory & PostgreSQL Dual Storage Engine          │
+│  - Audit Logging & Alert Rules Engine                  │
+└──────────────▲─────────────────────────┬───────────────┘
+               │                         │
+      Live Telemetry & Sync      Command Dispatch
+               │                         │
+┌──────────────┴─────────────────────────▼───────────────┐
+│              Web Admin Dashboard                       │
+│  - Real-time Device Fleet Overview                     │
+│  - Interactive GPS Map & Breadcrumb Trails (Leaflet)   │
+│  - Live Notification Intercept Stream & Search         │
+│  - Application Inventory & 24h Usage Statistics        │
+│  - Remote Command Center with Status Monitor           │
+│  - Diagnostic Audio Player & Security Audit Trail      │
+└────────────────────────────────────────────────────────┘
+```
 
-</div>
+---
+
+## 🚀 Quick Start
+
+### 1. Run the Backend & Dashboard
+
+#### Option A: Docker Compose (PostgreSQL + Backend)
+```bash
+docker-compose up -d
+```
+The Web Dashboard is now available at `http://localhost:8080`.
+
+#### Option B: Standalone Node.js (Zero external dependencies)
+The backend features an integrated embedded data engine that runs immediately without requiring PostgreSQL to be pre-installed:
+```bash
+cd server
+npm install
+npm start
+```
+Open `http://localhost:8080` in your browser.
+
+- **Default Administrator:** `admin@devicemanager.local`
+- **Default Password:** `admin`
+
+---
+
+### 2. Build and Install the Android Agent
+
+1. Open this repository in Android Studio or compile with Gradle:
+   ```bash
+   gradle assembleDebug
+   ```
+2. Install the generated APK onto your test device:
+   ```bash
+   adb install app/build/outputs/apk/debug/app-debug.apk
+   ```
+3. Open the **Device Manager** app on your phone.
+4. Set the **Server URL**:
+   - For Android Emulator: `http://10.0.2.2:8080`
+   - For physical device on same Wi-Fi: `http://<your-computer-lan-ip>:8080`
+5. On the Web Dashboard, click **Pair New Device** to generate a 6-digit pairing code.
+6. Enter the pairing code in the Android app and tap **Pair Device**.
+
+---
+
+## 🔒 Transparency & Permission Model
+
+This system strictly adheres to Android's official security and privacy model:
+
+1. **Persistent Notification:** A persistent foreground service notification titled *"Device Management Active"* remains visible in the system status bar at all times, with a single tap leading to the **DEVICE MANAGEMENT STATUS** screen.
+2. **Dedicated Privacy Screen:** The Android app displays live transparency statuses:
+   - Location: `ENABLED / DISABLED`
+   - Notification Access: `ENABLED / DISABLED`
+   - Files/Media: `ENABLED / DISABLED`
+   - Camera: `ENABLED / DISABLED`
+   - Microphone: `ENABLED / DISABLED`
+   - Usage Access: `ENABLED / DISABLED`
+   - Screen Sharing: `NOT ACTIVE / ACTIVE`
+3. **One-Tap Revocation & Disconnect:** The device user can disconnect and revoke the pairing token at any time via the `[Disconnect Device]` button.
+4. **No Stealth Mechanics:** No hidden icons, no root exploits, no persistent background services designed to bypass OS restrictions.
+
+---
+
+## 📋 Features Implemented
+
+- **Pairing System:** Secure 6-digit pairing code generator with 10-minute expiry countdown and JWT device token generation.
+- **Real-Time Telemetry:** Battery percentage & charging state, internal storage free/total, RAM memory free/total, network SSID, Android OS version, SDK version, uptime.
+- **Live Location Tracking:** GPS & Network location queries using `FusedLocationProviderClient`, displayed with pinpoint accuracy circles and historical breadcrumbs on Leaflet.
+- **Notification Capture:** `NotificationListenerService` capturing app name, title, text, category, and timestamp with full text search and deletion controls.
+- **App Inventory & Usage:** Full inventory of installed system and third-party apps, plus 24-hour foreground usage stats via `UsageStatsManager`.
+- **Remote Command Center:** WebSocket-dispatched commands (`SYNC_DEVICE`, `REQUEST_LOCATION`, `REQUEST_APPS`, `REQUEST_USAGE`, `SEND_NOTIFICATION`, `START_RECORDING`, `STOP_RECORDING`) with real-time state transitions (`PENDING` ➔ `RUNNING` ➔ `COMPLETED` / `FAILED`).
+- **Offline Resilience:** Room database local event queue for offline telemetry, location, and notifications with automatic synchronization when reconnected.
+- **Audit System:** Immutable administrative audit logs capturing timestamps, user IDs, actions, IP addresses, and payload details.

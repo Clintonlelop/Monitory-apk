@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Device Manager</string>
+    <string name="service_notification_channel_name">Device Management Service</string>
+    <string name="service_notification_channel_desc">Active background synchronization and real-time command processing</string>
+    <string name="service_notification_title">Device Management Active</string>
+    <string name="service_notification_text">Connected and synchronizing with management server</string>
+    <string name="recording_notification_title">Audio Recording in Progress</string>
+    <string name="recording_notification_text">Authorized diagnostic recording requested by administrator</string>
+</resources>
