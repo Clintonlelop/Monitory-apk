@@ -7,14 +7,15 @@ import cors from 'cors';
 import multer from 'multer';
 import { initDb, db } from './db.js';
 import { setupWebSocket } from './ws.js';
-import { generateToken, verifyToken, optionalAuth, hashPassword, comparePassword } from './auth.js';
+import { generateToken, verifyToken, verifyJwt, hashPassword, comparePassword } from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
-const PORT = process.env.APP_PORT || process.env.DEFAULT_APP_PORT || 3000;
+const PORT = process.env.APP_PORT || process.env.PORT || process.env.DEFAULT_APP_PORT || 3000;
+const MAX_UPLOAD_SIZE_MB = Number(process.env.MAX_UPLOAD_SIZE_MB || 20);
 
 // Setup Uploads directory
 const uploadsDir = path.join(__dirname, '..', 'uploads');
@@ -26,12 +27,40 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => cb(null, `${Date.now()}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`)
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: MAX_UPLOAD_SIZE_MB * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    if (!file.mimetype) return cb(new Error('Invalid file type'));
+    cb(null, true);
+  }
+});
 
 // Middlewares
-app.use(cors());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map(o => o.trim()) : true
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+const requestBuckets = new Map();
+function rateLimit(maxRequests, windowMs) {
+  return (req, res, next) => {
+    const key = `${req.ip}:${req.path}`;
+    const now = Date.now();
+    const bucket = requestBuckets.get(key) || { count: 0, resetAt: now + windowMs };
+    if (now > bucket.resetAt) {
+      bucket.count = 0;
+      bucket.resetAt = now + windowMs;
+    }
+    bucket.count += 1;
+    requestBuckets.set(key, bucket);
+    if (bucket.count > maxRequests) {
+      return res.status(429).json({ error: 'Too many requests. Please retry shortly.' });
+    }
+    next();
+  };
+}
 
 // Serve static dashboard files
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -67,6 +96,53 @@ async function logAudit(userId, deviceId, action, details, ip) {
   }
 }
 
+function verifyDeviceToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Device authorization required' });
+  }
+  try {
+    const decoded = verifyJwt(authHeader.split(' ')[1]);
+    if (decoded.type !== 'device') {
+      return res.status(403).json({ error: 'Device token required' });
+    }
+    if (req.params.id && decoded.deviceId !== req.params.id) {
+      return res.status(403).json({ error: 'Token is not valid for this device' });
+    }
+    req.device = decoded;
+    next();
+  } catch (_) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+async function hasUserDeviceAccess(userId, deviceId) {
+  if (db.isPostgres()) {
+    const result = await db.query('SELECT user_id FROM devices WHERE id = $1', [deviceId]);
+    const row = result.rows[0];
+    if (!row) return { exists: false, allowed: false };
+    return { exists: true, allowed: Number(row.user_id) === Number(userId) };
+  }
+
+  const device = db.getMemoryStore().devices.get(deviceId);
+  if (!device) return { exists: false, allowed: false };
+  return { exists: true, allowed: Number(device.user_id) === Number(userId) };
+}
+
+async function ensureUserOwnsDevice(req, res, next) {
+  const { id } = req.params;
+  try {
+    const access = await hasUserDeviceAccess(req.user.id, id);
+    if (!access.exists) return res.status(404).json({ error: 'Device not found' });
+    if (!access.allowed) {
+      return res.status(403).json({ error: 'Not authorized for this device' });
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ==========================================
 // HEALTH & METRICS
 // ==========================================
@@ -83,7 +159,7 @@ app.get('/health', (req, res) => {
 // ==========================================
 // AUTHENTICATION ROUTES
 // ==========================================
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', rateLimit(20, 5 * 60 * 1000), async (req, res) => {
   const { username, email, password } = req.body;
   if (!username || !email || !password) {
     return res.status(400).json({ error: 'Username, email and password required' });
@@ -119,11 +195,14 @@ app.post('/api/auth/register', async (req, res) => {
     const token = generateToken({ id: userId, username, email, role: 'admin' });
     res.json({ token, user: { id: userId, username, email, role: 'admin' } });
   } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'User already exists' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', rateLimit(30, 5 * 60 * 1000), async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password required' });
@@ -167,7 +246,7 @@ app.get('/api/auth/me', verifyToken, (req, res) => {
 // PAIRING SYSTEM
 // ==========================================
 // Admin generates a 6-digit code for device pairing
-app.post('/api/devices/pair-code', verifyToken, async (req, res) => {
+app.post('/api/devices/pair-code', verifyToken, rateLimit(30, 5 * 60 * 1000), async (req, res) => {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
@@ -190,7 +269,7 @@ app.post('/api/devices/pair-code', verifyToken, async (req, res) => {
 });
 
 // Android device submits pairing code
-app.post('/api/devices/pair', async (req, res) => {
+app.post('/api/devices/pair', rateLimit(30, 5 * 60 * 1000), async (req, res) => {
   const { pairingCode, deviceName, manufacturer, model, osVersion } = req.body;
   if (!pairingCode) {
     return res.status(400).json({ success: false, message: 'Pairing code is required' });
@@ -363,16 +442,18 @@ app.post('/api/devices/register-device', verifyToken, async (req, res) => {
 app.get('/api/devices', verifyToken, async (req, res) => {
   if (db.isPostgres()) {
     const result = await db.query(
-      'SELECT id, device_name, manufacturer, model, os_version, app_version, status, battery_level, is_charging, network_type, last_seen, created_at FROM devices ORDER BY last_seen DESC'
+      'SELECT id, device_name, manufacturer, model, os_version, app_version, status, battery_level, is_charging, network_type, last_seen, created_at FROM devices WHERE user_id = $1 ORDER BY last_seen DESC',
+      [req.user.id]
     );
     res.json(result.rows);
   } else {
-    const devices = Array.from(db.getMemoryStore().devices.values());
+    const devices = Array.from(db.getMemoryStore().devices.values())
+      .filter(device => Number(device.user_id) === Number(req.user.id));
     res.json(devices);
   }
 });
 
-app.get('/api/devices/:id', verifyToken, async (req, res) => {
+app.get('/api/devices/:id', verifyToken, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   let device, permissions;
 
@@ -396,7 +477,7 @@ app.get('/api/devices/:id', verifyToken, async (req, res) => {
   });
 });
 
-app.delete('/api/devices/:id', verifyToken, async (req, res) => {
+app.delete('/api/devices/:id', verifyToken, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     await db.query('DELETE FROM devices WHERE id = $1', [id]);
@@ -408,8 +489,17 @@ app.delete('/api/devices/:id', verifyToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/devices/:id/disconnect', optionalAuth, async (req, res) => {
+app.delete('/api/devices/:id/disconnect', verifyToken, async (req, res) => {
   const { id } = req.params;
+  const isDeviceCaller = req.user?.type === 'device';
+  if (isDeviceCaller && req.user.deviceId !== id) {
+    return res.status(403).json({ error: 'Token is not valid for this device' });
+  }
+  if (!isDeviceCaller) {
+    const access = await hasUserDeviceAccess(req.user.id, id);
+    if (!access.exists) return res.status(404).json({ error: 'Device not found' });
+    if (!access.allowed) return res.status(403).json({ error: 'Not authorized for this device' });
+  }
   const now = new Date();
   if (db.isPostgres()) {
     await db.query('UPDATE devices SET status = $1, last_seen = $2 WHERE id = $3', ['OFFLINE', now, id]);
@@ -429,7 +519,7 @@ app.delete('/api/devices/:id/disconnect', optionalAuth, async (req, res) => {
 // ==========================================
 // TELEMETRY SYNC
 // ==========================================
-app.post('/api/devices/:id/telemetry', async (req, res) => {
+app.post('/api/devices/:id/telemetry', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const telemetry = req.body;
   const now = new Date();
@@ -510,7 +600,7 @@ app.post('/api/devices/:id/telemetry', async (req, res) => {
 // ==========================================
 // LOCATION TRACKING
 // ==========================================
-app.post('/api/devices/:id/location', async (req, res) => {
+app.post('/api/devices/:id/location', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const { latitude, longitude, accuracy, altitude, speed, provider, timestamp } = req.body;
 
@@ -544,7 +634,7 @@ app.post('/api/devices/:id/location', async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/locations', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/locations', verifyToken, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   const limit = parseInt(req.query.limit) || 100;
 
@@ -566,7 +656,7 @@ app.get('/api/devices/:id/locations', verifyToken, async (req, res) => {
 // ==========================================
 // NOTIFICATIONS CAPTURE
 // ==========================================
-app.post('/api/devices/:id/notifications', async (req, res) => {
+app.post('/api/devices/:id/notifications', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const notif = req.body;
 
@@ -600,19 +690,41 @@ app.post('/api/devices/:id/notifications', async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/notifications', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/notifications', verifyToken, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
-  const search = req.query.search;
-  const limit = parseInt(req.query.limit) || 50;
+  const search = (req.query.search || '').trim();
+  const appPackage = (req.query.appPackage || '').trim();
+  const startTime = Number(req.query.startTime || 0);
+  const endTime = Number(req.query.endTime || 0);
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
 
   if (db.isPostgres()) {
     let query = 'SELECT * FROM notifications WHERE device_id = $1';
     const params = [id];
+    let nextParam = 2;
     if (search) {
-      query += ' AND (title ILIKE $2 OR text ILIKE $2 OR app_name ILIKE $2)';
+      query += ` AND (title ILIKE $${nextParam} OR text ILIKE $${nextParam} OR app_name ILIKE $${nextParam})`;
       params.push(`%${search}%`);
+      nextParam += 1;
     }
-    query += ` ORDER BY post_time DESC LIMIT ${limit}`;
+    if (appPackage) {
+      query += ` AND package_name = $${nextParam}`;
+      params.push(appPackage);
+      nextParam += 1;
+    }
+    if (startTime > 0) {
+      query += ` AND post_time >= $${nextParam}`;
+      params.push(startTime);
+      nextParam += 1;
+    }
+    if (endTime > 0) {
+      query += ` AND post_time <= $${nextParam}`;
+      params.push(endTime);
+      nextParam += 1;
+    }
+    query += ` ORDER BY post_time DESC LIMIT $${nextParam} OFFSET $${nextParam + 1}`;
+    params.push(limit, offset);
     const result = await db.query(query, params);
     res.json(result.rows);
   } else {
@@ -621,11 +733,21 @@ app.get('/api/devices/:id/notifications', verifyToken, async (req, res) => {
       const s = search.toLowerCase();
       list = list.filter(n => (n.title && n.title.toLowerCase().includes(s)) || (n.text && n.text.toLowerCase().includes(s)) || (n.app_name && n.app_name.toLowerCase().includes(s)));
     }
-    res.json(list.slice(0, limit));
+    if (appPackage) {
+      list = list.filter(n => n.package_name === appPackage);
+    }
+    if (startTime > 0) {
+      list = list.filter(n => Number(n.post_time) >= startTime);
+    }
+    if (endTime > 0) {
+      list = list.filter(n => Number(n.post_time) <= endTime);
+    }
+    list = list.sort((a, b) => Number(b.post_time) - Number(a.post_time));
+    res.json(list.slice(offset, offset + limit));
   }
 });
 
-app.delete('/api/devices/:id/notifications/:notifId', verifyToken, async (req, res) => {
+app.delete('/api/devices/:id/notifications/:notifId', verifyToken, ensureUserOwnsDevice, async (req, res) => {
   const { id, notifId } = req.params;
   if (db.isPostgres()) {
     await db.query('DELETE FROM notifications WHERE id = $1 AND device_id = $2', [notifId, id]);
@@ -640,7 +762,7 @@ app.delete('/api/devices/:id/notifications/:notifId', verifyToken, async (req, r
 // ==========================================
 // APPLICATION INVENTORY
 // ==========================================
-app.post('/api/devices/:id/apps', async (req, res) => {
+app.post('/api/devices/:id/apps', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const apps = req.body; // Array of AppInfoData
 
@@ -663,7 +785,7 @@ app.post('/api/devices/:id/apps', async (req, res) => {
   res.json({ success: true, count: apps.length });
 });
 
-app.get('/api/devices/:id/apps', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/apps', verifyToken, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   const search = req.query.search;
 
@@ -690,7 +812,7 @@ app.get('/api/devices/:id/apps', verifyToken, async (req, res) => {
 // ==========================================
 // USAGE STATISTICS
 // ==========================================
-app.post('/api/devices/:id/usage', async (req, res) => {
+app.post('/api/devices/:id/usage', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const usageList = req.body;
 
@@ -718,7 +840,7 @@ app.post('/api/devices/:id/usage', async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/usage', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/usage', verifyToken, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query(
@@ -734,7 +856,7 @@ app.get('/api/devices/:id/usage', verifyToken, async (req, res) => {
 // ==========================================
 // PERMISSIONS
 // ==========================================
-app.put('/api/devices/:id/permissions', async (req, res) => {
+app.put('/api/devices/:id/permissions', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const perms = req.body;
 
@@ -762,7 +884,7 @@ app.put('/api/devices/:id/permissions', async (req, res) => {
 // ==========================================
 // COMMAND DISPATCH SYSTEM
 // ==========================================
-app.post('/api/devices/:id/commands', verifyToken, async (req, res) => {
+app.post('/api/devices/:id/commands', verifyToken, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   const { commandType, parameters } = req.body;
 
@@ -807,7 +929,7 @@ app.post('/api/devices/:id/commands', verifyToken, async (req, res) => {
   });
 });
 
-app.get('/api/devices/:id/commands', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/commands', verifyToken, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query(
@@ -823,7 +945,31 @@ app.get('/api/devices/:id/commands', verifyToken, async (req, res) => {
   }
 });
 
-app.post('/api/devices/:id/commands/:commandId/status', async (req, res) => {
+app.get('/api/devices/:id/commands/pending', verifyDeviceToken, async (req, res) => {
+  const { id } = req.params;
+  if (db.isPostgres()) {
+    const result = await db.query(
+      `SELECT id AS "commandId", device_id AS "deviceId", command_type AS "commandType", parameters, status, timestamp
+       FROM commands
+       WHERE device_id = $1 AND status = 'PENDING'
+       ORDER BY timestamp ASC
+       LIMIT 50`,
+      [id]
+    );
+    return res.json(result.rows.map(row => ({
+      ...row,
+      parameters: row.parameters || {}
+    })));
+  }
+
+  const list = Array.from(db.getMemoryStore().commands.values())
+    .filter(command => (command.deviceId === id || command.device_id === id) && command.status === 'PENDING')
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .slice(0, 50);
+  res.json(list);
+});
+
+app.post('/api/devices/:id/commands/:commandId/status', verifyDeviceToken, async (req, res) => {
   const { id, commandId } = req.params;
   const { status, result, errorMessage } = req.body;
   const now = Date.now();
@@ -859,7 +1005,7 @@ app.post('/api/devices/:id/commands/:commandId/status', async (req, res) => {
 // ==========================================
 // AUDIO & FILE UPLOADS
 // ==========================================
-app.post('/api/devices/:id/recordings', upload.single('file'), async (req, res) => {
+app.post('/api/devices/:id/recordings', verifyDeviceToken, upload.single('file'), async (req, res) => {
   const { id } = req.params;
   const durationMs = parseInt(req.body.durationMs) || 0;
   if (!req.file) {
@@ -893,7 +1039,7 @@ app.post('/api/devices/:id/recordings', upload.single('file'), async (req, res) 
   res.json({ success: true, recording });
 });
 
-app.get('/api/devices/:id/recordings', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/recordings', verifyToken, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query('SELECT * FROM recordings WHERE device_id = $1 ORDER BY created_at DESC', [id]);
@@ -908,25 +1054,72 @@ app.get('/api/devices/:id/recordings', verifyToken, async (req, res) => {
 // ==========================================
 app.get('/api/audit', verifyToken, async (req, res) => {
   if (db.isPostgres()) {
-    const result = await db.query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 100');
+    const result = await db.query(
+      `SELECT a.*
+       FROM audit_logs a
+       LEFT JOIN devices d ON d.id = a.device_id
+       WHERE a.user_id = $1 OR d.user_id = $1
+       ORDER BY a.created_at DESC
+       LIMIT 100`,
+      [req.user.id]
+    );
     res.json(result.rows);
   } else {
-    res.json(db.getMemoryStore().audit_logs.slice(0, 100));
+    const store = db.getMemoryStore();
+    const logs = store.audit_logs.filter(log => {
+      if (Number(log.user_id) === Number(req.user.id)) return true;
+      if (!log.device_id) return false;
+      const device = store.devices.get(log.device_id);
+      return Number(device?.user_id) === Number(req.user.id);
+    });
+    res.json(logs.slice(0, 100));
   }
 });
 
 app.get('/api/alerts', verifyToken, async (req, res) => {
   if (db.isPostgres()) {
-    const result = await db.query('SELECT * FROM alerts ORDER BY created_at DESC LIMIT 50');
+    const result = await db.query(
+      `SELECT a.*
+       FROM alerts a
+       JOIN devices d ON d.id = a.device_id
+       WHERE d.user_id = $1
+       ORDER BY a.created_at DESC
+       LIMIT 50`,
+      [req.user.id]
+    );
     res.json(result.rows);
   } else {
-    res.json(db.getMemoryStore().alerts.slice(0, 50));
+    const store = db.getMemoryStore();
+    const alerts = store.alerts.filter(alert => {
+      const device = store.devices.get(alert.device_id);
+      return Number(device?.user_id) === Number(req.user.id);
+    });
+    res.json(alerts.slice(0, 50));
   }
 });
 
 // Catch-all for single-page application routing
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    return res.status(404).json({ error: 'Endpoint not found' });
+  }
+  next();
+});
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+app.use((err, req, res, _next) => {
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: `Upload too large. Max size is ${MAX_UPLOAD_SIZE_MB}MB.` });
+  }
+  const status = err.statusCode || 500;
+  const message = status >= 500 ? 'Server temporarily unavailable' : (err.message || 'Request failed');
+  if (status >= 500) {
+    console.error('Unhandled server error:', err);
+  }
+  return res.status(status).json({ error: message });
 });
 
 // Start Server

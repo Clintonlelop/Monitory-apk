@@ -9,6 +9,9 @@ let mapCircle = null;
 let mapPolyline = null;
 let locationHistory = [];
 let pairingTimer = null;
+let notificationOffset = 0;
+let hasMoreNotifications = true;
+const notificationPageSize = 30;
 
 // DOM Elements
 const authModal = document.getElementById('auth-modal');
@@ -117,6 +120,7 @@ function initDashboard() {
   loadDevices();
   loadAuditLogs();
   loadAlerts();
+  setupNotificationFilters();
 }
 
 // Navigation
@@ -160,7 +164,7 @@ function showView(viewName) {
 // WebSocket Live Real-Time Connection
 function connectWebSocket() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${location.host}/ws/dashboard`;
+  const wsUrl = `${protocol}//${location.host}/ws/dashboard?token=${encodeURIComponent(authToken || '')}`;
 
   ws = new WebSocket(wsUrl);
 
@@ -199,7 +203,8 @@ function handleWsMessage(msg) {
   } else if (msg.type === 'DEVICE_NOTIFICATION_RECEIVED') {
     appendNotificationFeed(msg.notification);
     if (currentDevice && currentDevice.id === msg.deviceId) {
-      loadDeviceNotifications(currentDevice.id);
+      notificationOffset = 0;
+      loadDeviceNotifications(currentDevice.id, true);
     }
   } else if (msg.type === 'COMMAND_STATUS_UPDATED') {
     if (currentDevice && currentDevice.id === msg.deviceId) {
@@ -320,7 +325,8 @@ window.openDeviceDetail = async function(deviceId) {
 
     // Load sub-resources
     loadDeviceLocations(deviceId);
-    loadDeviceNotifications(deviceId);
+    notificationOffset = 0;
+    loadDeviceNotifications(deviceId, true);
     loadDeviceApps(deviceId);
     loadDeviceUsage(deviceId);
     loadDeviceCommands(deviceId);
@@ -466,19 +472,68 @@ function updateMapLocation(loc) {
 }
 
 // Device Notifications
-async function loadDeviceNotifications(deviceId) {
+function setupNotificationFilters() {
+  const searchInput = document.getElementById('notif-filter-input');
+  const packageInput = document.getElementById('notif-app-filter-input');
+  const dateFromInput = document.getElementById('notif-date-from-input');
+  const dateToInput = document.getElementById('notif-date-to-input');
+  const loadMoreBtn = document.getElementById('notif-load-more-btn');
+
+  [searchInput, packageInput, dateFromInput, dateToInput].forEach((element) => {
+    if (!element) return;
+    element.addEventListener('input', () => {
+      if (!currentDevice) return;
+      notificationOffset = 0;
+      loadDeviceNotifications(currentDevice.id, true);
+    });
+  });
+
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', () => {
+      if (!currentDevice || !hasMoreNotifications) return;
+      notificationOffset += notificationPageSize;
+      loadDeviceNotifications(currentDevice.id, false);
+    });
+  }
+}
+
+function buildNotificationQuery(limit, offset) {
+  const search = document.getElementById('notif-filter-input')?.value?.trim() || '';
+  const appPackage = document.getElementById('notif-app-filter-input')?.value?.trim() || '';
+  const dateFrom = document.getElementById('notif-date-from-input')?.value;
+  const dateTo = document.getElementById('notif-date-to-input')?.value;
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (search) params.set('search', search);
+  if (appPackage) params.set('appPackage', appPackage);
+  if (dateFrom) params.set('startTime', String(new Date(`${dateFrom}T00:00:00`).getTime()));
+  if (dateTo) params.set('endTime', String(new Date(`${dateTo}T23:59:59`).getTime()));
+  return params.toString();
+}
+
+async function loadDeviceNotifications(deviceId, replace = true) {
   try {
-    const res = await fetch(`/api/devices/${deviceId}/notifications`, {
-      headers: { 'Authorization': `Bearer ${authToken}` }
+    const query = buildNotificationQuery(notificationPageSize, notificationOffset);
+    const res = await fetch(`/api/devices/${deviceId}/notifications?${query}`, {
+      headers: { Authorization: 'Bearer ' + authToken }
     });
     if (!res.ok) return;
+
     const notifs = await res.json();
     const tbody = document.getElementById('notif-table-body');
-    if (notifs.length === 0) {
+    hasMoreNotifications = notifs.length >= notificationPageSize;
+
+    const loadMoreBtn = document.getElementById('notif-load-more-btn');
+    if (loadMoreBtn) {
+      loadMoreBtn.disabled = !hasMoreNotifications;
+      loadMoreBtn.textContent = hasMoreNotifications ? 'Load More' : 'No More Results';
+    }
+
+    if (replace && notifs.length === 0) {
       tbody.innerHTML = '<tr><td colspan="5" class="text-center">No notifications recorded</td></tr>';
       return;
     }
-    tbody.innerHTML = notifs.map(n => `
+
+    const rows = notifs.map(n => `
       <tr>
         <td><b>${escapeHtml(n.app_name || n.package_name)}</b></td>
         <td>${escapeHtml(n.title || '')}</td>
@@ -487,15 +542,22 @@ async function loadDeviceNotifications(deviceId) {
         <td><button class="btn-icon" onclick="deleteNotification('${deviceId}', '${n.id}')">🗑️</button></td>
       </tr>
     `).join('');
+
+    if (replace) {
+      tbody.innerHTML = rows;
+    } else {
+      tbody.insertAdjacentHTML('beforeend', rows);
+    }
   } catch (_) {}
 }
 
 window.deleteNotification = async function(deviceId, notifId) {
   await fetch(`/api/devices/${deviceId}/notifications/${notifId}`, {
     method: 'DELETE',
-    headers: { 'Authorization': `Bearer ${authToken}` }
+    headers: { Authorization: 'Bearer ' + authToken }
   });
-  loadDeviceNotifications(deviceId);
+  notificationOffset = 0;
+  loadDeviceNotifications(deviceId, true);
 };
 
 function appendNotificationFeed(n) {

@@ -1,5 +1,6 @@
 package com.example.data.remote
 
+import com.example.BuildConfig
 import com.example.data.prefs.PreferenceManager
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -17,7 +18,11 @@ class ApiClient(private val preferenceManager: PreferenceManager) {
 
     val okHttpClient: OkHttpClient by lazy {
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BASIC
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
         }
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)

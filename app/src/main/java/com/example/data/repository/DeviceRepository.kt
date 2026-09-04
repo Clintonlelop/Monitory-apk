@@ -240,7 +240,7 @@ class DeviceRepository(
             if (response.isSuccessful && response.body()?.success == true) {
                 val body = response.body()!!
                 preferenceManager.setAuthToken(body.token)
-                body.deviceId?.let { preferenceManager.setPaired(true) }
+                body.deviceId?.let { preferenceManager.setDeviceId(it) }
                 preferenceManager.setPaired(true)
 
                 // Start Foreground Service & WebSocket

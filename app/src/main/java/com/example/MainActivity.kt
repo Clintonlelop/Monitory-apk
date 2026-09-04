@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -25,6 +26,7 @@ import androidx.compose.ui.Modifier
 import com.example.ui.screens.ActivationScreen
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.DashboardScreen
+import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.PrivacyPermissionsScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.MainViewModel
@@ -53,21 +55,8 @@ class MainActivity : ComponentActivity() {
                     viewModel.refreshPermissions()
                 }
 
-                fun launchPermissionsRequest() {
-                    val permissions = mutableListOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                        Manifest.permission.RECORD_AUDIO,
-                        Manifest.permission.CAMERA
-                    )
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                    permissionLauncher.launch(permissions.toTypedArray())
-                }
-
-                LaunchedEffect(Unit) {
-                    launchPermissionsRequest()
+                fun launchPermissionsRequest(permissions: Array<String>) {
+                    permissionLauncher.launch(permissions)
                 }
 
                 LaunchedEffect(uiState) {
@@ -94,10 +83,46 @@ class MainActivity : ComponentActivity() {
                         label = "ScreenTransition"
                     ) { screen ->
                         when (screen) {
+                            is Screen.Onboarding -> OnboardingScreen(
+                                onContinue = { viewModel.completeOnboarding() }
+                            )
                             is Screen.Auth -> AuthScreen(viewModel = viewModel)
                             is Screen.Activation -> ActivationScreen(
                                 viewModel = viewModel,
-                                onRequestPermissions = { launchPermissionsRequest() }
+                                onRequestLocationPermissions = {
+                                    launchPermissionsRequest(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                },
+                                onRequestMediaPermissions = {
+                                    launchPermissionsRequest(
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            arrayOf(
+                                                Manifest.permission.READ_MEDIA_IMAGES,
+                                                Manifest.permission.READ_MEDIA_VIDEO
+                                            )
+                                        } else {
+                                            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                                        }
+                                    )
+                                },
+                                onRequestCameraAudioPermissions = {
+                                    launchPermissionsRequest(
+                                        arrayOf(
+                                            Manifest.permission.CAMERA,
+                                            Manifest.permission.RECORD_AUDIO
+                                        )
+                                    )
+                                },
+                                onOpenNotificationSettings = {
+                                    startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                                },
+                                onOpenUsageAccessSettings = {
+                                    startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                                }
                             )
                             is Screen.Dashboard -> DashboardScreen(viewModel = viewModel)
                             is Screen.Privacy -> PrivacyPermissionsScreen(viewModel = viewModel)
