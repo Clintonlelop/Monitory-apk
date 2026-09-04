@@ -36,13 +36,6 @@ const upload = multer({
   }
 });
 
-// Middlewares
-app.use(cors({
-  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map(o => o.trim()) : true
-}));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
-
 const requestBuckets = new Map();
 function rateLimit(maxRequests, windowMs) {
   return (req, res, next) => {
@@ -61,6 +54,23 @@ function rateLimit(maxRequests, windowMs) {
     next();
   };
 }
+
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:8080')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
+// Middlewares
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Origin not allowed by CORS policy'));
+  }
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.use('/api', rateLimit(300, 60 * 1000));
+const protectedRouteLimit = rateLimit(120, 60 * 1000);
 
 // Serve static dashboard files
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -364,7 +374,7 @@ app.post('/api/devices/pair', rateLimit(30, 5 * 60 * 1000), async (req, res) => 
 });
 
 // Direct account-based device registration from Android app
-app.post('/api/devices/register-device', verifyToken, async (req, res) => {
+app.post('/api/devices/register-device', verifyToken, protectedRouteLimit, async (req, res) => {
   const { deviceName, manufacturer, model, osVersion, sdkVersion, appVersion } = req.body;
   const userId = req.user.id;
 
@@ -439,7 +449,7 @@ app.post('/api/devices/register-device', verifyToken, async (req, res) => {
 // ==========================================
 // DEVICE MANAGEMENT ROUTES
 // ==========================================
-app.get('/api/devices', verifyToken, async (req, res) => {
+app.get('/api/devices', verifyToken, protectedRouteLimit, async (req, res) => {
   if (db.isPostgres()) {
     const result = await db.query(
       'SELECT id, device_name, manufacturer, model, os_version, app_version, status, battery_level, is_charging, network_type, last_seen, created_at FROM devices WHERE user_id = $1 ORDER BY last_seen DESC',
@@ -453,7 +463,7 @@ app.get('/api/devices', verifyToken, async (req, res) => {
   }
 });
 
-app.get('/api/devices/:id', verifyToken, ensureUserOwnsDevice, async (req, res) => {
+app.get('/api/devices/:id', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   let device, permissions;
 
@@ -477,7 +487,7 @@ app.get('/api/devices/:id', verifyToken, ensureUserOwnsDevice, async (req, res) 
   });
 });
 
-app.delete('/api/devices/:id', verifyToken, ensureUserOwnsDevice, async (req, res) => {
+app.delete('/api/devices/:id', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     await db.query('DELETE FROM devices WHERE id = $1', [id]);
@@ -489,7 +499,7 @@ app.delete('/api/devices/:id', verifyToken, ensureUserOwnsDevice, async (req, re
   res.json({ success: true });
 });
 
-app.delete('/api/devices/:id/disconnect', verifyToken, async (req, res) => {
+app.delete('/api/devices/:id/disconnect', verifyToken, protectedRouteLimit, async (req, res) => {
   const { id } = req.params;
   const isDeviceCaller = req.user?.type === 'device';
   if (isDeviceCaller && req.user.deviceId !== id) {
@@ -519,7 +529,7 @@ app.delete('/api/devices/:id/disconnect', verifyToken, async (req, res) => {
 // ==========================================
 // TELEMETRY SYNC
 // ==========================================
-app.post('/api/devices/:id/telemetry', verifyDeviceToken, async (req, res) => {
+app.post('/api/devices/:id/telemetry', verifyDeviceToken, protectedRouteLimit, async (req, res) => {
   const { id } = req.params;
   const telemetry = req.body;
   const now = new Date();
@@ -600,7 +610,7 @@ app.post('/api/devices/:id/telemetry', verifyDeviceToken, async (req, res) => {
 // ==========================================
 // LOCATION TRACKING
 // ==========================================
-app.post('/api/devices/:id/location', verifyDeviceToken, async (req, res) => {
+app.post('/api/devices/:id/location', verifyDeviceToken, protectedRouteLimit, async (req, res) => {
   const { id } = req.params;
   const { latitude, longitude, accuracy, altitude, speed, provider, timestamp } = req.body;
 
@@ -634,7 +644,7 @@ app.post('/api/devices/:id/location', verifyDeviceToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/locations', verifyToken, ensureUserOwnsDevice, async (req, res) => {
+app.get('/api/devices/:id/locations', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   const limit = parseInt(req.query.limit) || 100;
 
@@ -656,7 +666,7 @@ app.get('/api/devices/:id/locations', verifyToken, ensureUserOwnsDevice, async (
 // ==========================================
 // NOTIFICATIONS CAPTURE
 // ==========================================
-app.post('/api/devices/:id/notifications', verifyDeviceToken, async (req, res) => {
+app.post('/api/devices/:id/notifications', verifyDeviceToken, protectedRouteLimit, async (req, res) => {
   const { id } = req.params;
   const notif = req.body;
 
@@ -690,7 +700,7 @@ app.post('/api/devices/:id/notifications', verifyDeviceToken, async (req, res) =
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/notifications', verifyToken, ensureUserOwnsDevice, async (req, res) => {
+app.get('/api/devices/:id/notifications', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   const search = (req.query.search || '').trim();
   const appPackage = (req.query.appPackage || '').trim();
@@ -747,7 +757,7 @@ app.get('/api/devices/:id/notifications', verifyToken, ensureUserOwnsDevice, asy
   }
 });
 
-app.delete('/api/devices/:id/notifications/:notifId', verifyToken, ensureUserOwnsDevice, async (req, res) => {
+app.delete('/api/devices/:id/notifications/:notifId', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
   const { id, notifId } = req.params;
   if (db.isPostgres()) {
     await db.query('DELETE FROM notifications WHERE id = $1 AND device_id = $2', [notifId, id]);
@@ -762,7 +772,7 @@ app.delete('/api/devices/:id/notifications/:notifId', verifyToken, ensureUserOwn
 // ==========================================
 // APPLICATION INVENTORY
 // ==========================================
-app.post('/api/devices/:id/apps', verifyDeviceToken, async (req, res) => {
+app.post('/api/devices/:id/apps', verifyDeviceToken, protectedRouteLimit, async (req, res) => {
   const { id } = req.params;
   const apps = req.body; // Array of AppInfoData
 
@@ -785,7 +795,7 @@ app.post('/api/devices/:id/apps', verifyDeviceToken, async (req, res) => {
   res.json({ success: true, count: apps.length });
 });
 
-app.get('/api/devices/:id/apps', verifyToken, ensureUserOwnsDevice, async (req, res) => {
+app.get('/api/devices/:id/apps', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   const search = req.query.search;
 
@@ -812,7 +822,7 @@ app.get('/api/devices/:id/apps', verifyToken, ensureUserOwnsDevice, async (req, 
 // ==========================================
 // USAGE STATISTICS
 // ==========================================
-app.post('/api/devices/:id/usage', verifyDeviceToken, async (req, res) => {
+app.post('/api/devices/:id/usage', verifyDeviceToken, protectedRouteLimit, async (req, res) => {
   const { id } = req.params;
   const usageList = req.body;
 
@@ -840,7 +850,7 @@ app.post('/api/devices/:id/usage', verifyDeviceToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/usage', verifyToken, ensureUserOwnsDevice, async (req, res) => {
+app.get('/api/devices/:id/usage', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query(
@@ -856,7 +866,7 @@ app.get('/api/devices/:id/usage', verifyToken, ensureUserOwnsDevice, async (req,
 // ==========================================
 // PERMISSIONS
 // ==========================================
-app.put('/api/devices/:id/permissions', verifyDeviceToken, async (req, res) => {
+app.put('/api/devices/:id/permissions', verifyDeviceToken, protectedRouteLimit, async (req, res) => {
   const { id } = req.params;
   const perms = req.body;
 
@@ -884,7 +894,7 @@ app.put('/api/devices/:id/permissions', verifyDeviceToken, async (req, res) => {
 // ==========================================
 // COMMAND DISPATCH SYSTEM
 // ==========================================
-app.post('/api/devices/:id/commands', verifyToken, ensureUserOwnsDevice, async (req, res) => {
+app.post('/api/devices/:id/commands', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   const { commandType, parameters } = req.body;
 
@@ -929,7 +939,7 @@ app.post('/api/devices/:id/commands', verifyToken, ensureUserOwnsDevice, async (
   });
 });
 
-app.get('/api/devices/:id/commands', verifyToken, ensureUserOwnsDevice, async (req, res) => {
+app.get('/api/devices/:id/commands', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query(
@@ -945,7 +955,7 @@ app.get('/api/devices/:id/commands', verifyToken, ensureUserOwnsDevice, async (r
   }
 });
 
-app.get('/api/devices/:id/commands/pending', verifyDeviceToken, async (req, res) => {
+app.get('/api/devices/:id/commands/pending', verifyDeviceToken, protectedRouteLimit, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query(
@@ -969,7 +979,7 @@ app.get('/api/devices/:id/commands/pending', verifyDeviceToken, async (req, res)
   res.json(list);
 });
 
-app.post('/api/devices/:id/commands/:commandId/status', verifyDeviceToken, async (req, res) => {
+app.post('/api/devices/:id/commands/:commandId/status', verifyDeviceToken, protectedRouteLimit, async (req, res) => {
   const { id, commandId } = req.params;
   const { status, result, errorMessage } = req.body;
   const now = Date.now();
@@ -1005,7 +1015,7 @@ app.post('/api/devices/:id/commands/:commandId/status', verifyDeviceToken, async
 // ==========================================
 // AUDIO & FILE UPLOADS
 // ==========================================
-app.post('/api/devices/:id/recordings', verifyDeviceToken, upload.single('file'), async (req, res) => {
+app.post('/api/devices/:id/recordings', verifyDeviceToken, protectedRouteLimit, upload.single('file'), async (req, res) => {
   const { id } = req.params;
   const durationMs = parseInt(req.body.durationMs) || 0;
   if (!req.file) {
@@ -1039,7 +1049,7 @@ app.post('/api/devices/:id/recordings', verifyDeviceToken, upload.single('file')
   res.json({ success: true, recording });
 });
 
-app.get('/api/devices/:id/recordings', verifyToken, ensureUserOwnsDevice, async (req, res) => {
+app.get('/api/devices/:id/recordings', verifyToken, protectedRouteLimit, ensureUserOwnsDevice, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query('SELECT * FROM recordings WHERE device_id = $1 ORDER BY created_at DESC', [id]);
@@ -1052,7 +1062,7 @@ app.get('/api/devices/:id/recordings', verifyToken, ensureUserOwnsDevice, async 
 // ==========================================
 // AUDIT & ALERTS
 // ==========================================
-app.get('/api/audit', verifyToken, async (req, res) => {
+app.get('/api/audit', verifyToken, protectedRouteLimit, async (req, res) => {
   if (db.isPostgres()) {
     const result = await db.query(
       `SELECT a.*
@@ -1076,7 +1086,7 @@ app.get('/api/audit', verifyToken, async (req, res) => {
   }
 });
 
-app.get('/api/alerts', verifyToken, async (req, res) => {
+app.get('/api/alerts', verifyToken, protectedRouteLimit, async (req, res) => {
   if (db.isPostgres()) {
     const result = await db.query(
       `SELECT a.*
@@ -1113,6 +1123,9 @@ app.get('*', (req, res) => {
 app.use((err, req, res, _next) => {
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({ error: `Upload too large. Max size is ${MAX_UPLOAD_SIZE_MB}MB.` });
+  }
+  if (err?.message?.includes('CORS')) {
+    return res.status(403).json({ error: err.message });
   }
   const status = err.statusCode || 500;
   const message = status >= 500 ? 'Server temporarily unavailable' : (err.message || 'Request failed');
