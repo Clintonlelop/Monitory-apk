@@ -252,13 +252,6 @@ fun AuthScreen(
                         },
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         singleLine = true,
-                        supportingText = {
-                            Text(
-                                text = "Pre-configured password: admin123",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("password_input")

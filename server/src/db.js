@@ -21,14 +21,6 @@ const memoryStore = {
       password_hash: '$2a$10$w85v21rIe/EaG1o4wQ1i7O3Z22fRkFf1F9FkHqT7c2.k9mE5iAxeG', // password: admin
       role: 'admin',
       created_at: new Date()
-    },
-    {
-      id: 2,
-      username: 'Clinton',
-      email: 'clintonumelo15@gmail.com',
-      password_hash: '$2a$10$asTM6G2n7Nzc6.7XSyLWWeVu/zBsPMQTHy5Km5l.ieDF2avgwYcHC', // password: admin123
-      role: 'admin',
-      created_at: new Date()
     }
   ],
   devices: new Map(),

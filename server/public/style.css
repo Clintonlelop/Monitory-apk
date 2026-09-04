@@ -731,6 +731,19 @@ input[type="text"]:focus, input[type="password"]:focus {
   min-width: 240px;
 }
 
+.flex-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.table-footer {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .auth-hint {
   font-size: 0.76rem;
   color: var(--text-muted);

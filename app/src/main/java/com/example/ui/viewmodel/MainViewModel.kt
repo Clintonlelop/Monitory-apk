@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 sealed class Screen {
+    data object Onboarding : Screen()
     data object Auth : Screen()
     data object Activation : Screen()
     data object Dashboard : Screen()
@@ -44,14 +45,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _currentScreen = MutableStateFlow<Screen>(
-        if (prefs.isPaired()) Screen.Dashboard else Screen.Auth
+        when {
+            !prefs.isOnboardingCompleted() -> Screen.Onboarding
+            prefs.isPaired() -> Screen.Dashboard
+            else -> Screen.Auth
+        }
     )
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
 
     val serverUrl = MutableStateFlow(prefs.getServerUrl())
-    val userEmail = MutableStateFlow(prefs.getUserEmail() ?: "clintonumelo15@gmail.com")
-    val userPassword = MutableStateFlow("admin123")
-    val username = MutableStateFlow("Clinton")
+    val userEmail = MutableStateFlow(prefs.getUserEmail().orEmpty())
+    val userPassword = MutableStateFlow("")
+    val username = MutableStateFlow("")
     val isRegisterMode = MutableStateFlow(false)
     val pairingCode = MutableStateFlow("")
     val deviceName = MutableStateFlow(prefs.getDeviceName())
@@ -72,6 +77,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun navigateTo(screen: Screen) {
         _currentScreen.value = screen
+    }
+
+    fun completeOnboarding() {
+        prefs.setOnboardingCompleted(true)
+        _currentScreen.value = if (prefs.isPaired()) Screen.Dashboard else Screen.Auth
     }
 
     fun setServerUrl(url: String) {

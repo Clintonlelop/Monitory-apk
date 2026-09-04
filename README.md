@@ -50,10 +50,10 @@ A complete, production-ready, fully transparent Android Device Management agent 
 ```bash
 docker-compose up -d
 ```
-The Web Dashboard is now available at `http://localhost:8080`.
+The Web Dashboard is now available at `http://localhost:8080` (or your configured domain).
 
-#### Option B: Standalone Node.js (Zero external dependencies)
-The backend features an integrated embedded data engine that runs immediately without requiring PostgreSQL to be pre-installed:
+#### Option B: Standalone Node.js
+Use environment variables from `.env.example` and run the backend directly:
 ```bash
 cd server
 npm install
@@ -61,8 +61,7 @@ npm start
 ```
 Open `http://localhost:8080` in your browser.
 
-- **Default Administrator:** `admin@devicemanager.local`
-- **Default Password:** `admin`
+In production, always disable default local credentials and create real accounts via `/api/auth/register`.
 
 ---
 
@@ -77,9 +76,7 @@ Open `http://localhost:8080` in your browser.
    adb install app/build/outputs/apk/debug/app-debug.apk
    ```
 3. Open the **Device Manager** app on your phone.
-4. Set the **Server URL**:
-   - For Android Emulator: `http://10.0.2.2:8080`
-   - For physical device on same Wi-Fi: `http://<your-computer-lan-ip>:8080`
+4. Set the **Server URL** to your deployed HTTPS API URL (for example `https://api.example.com`).
 5. On the Web Dashboard, click **Pair New Device** to generate a 6-digit pairing code.
 6. Enter the pairing code in the Android app and tap **Pair Device**.
 

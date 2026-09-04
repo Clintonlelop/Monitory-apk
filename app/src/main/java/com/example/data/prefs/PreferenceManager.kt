@@ -19,11 +19,11 @@ class PreferenceManager(context: Context) {
     val lastSyncFlow: StateFlow<Long> = _lastSyncFlow.asStateFlow()
 
     fun getServerUrl(): String {
-        return prefs.getString(KEY_SERVER_URL, "http://10.0.2.2:8080") ?: "http://10.0.2.2:8080"
+        return prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
     }
 
     fun getPublicWebUrl(): String {
-        return DEFAULT_SERVER_URL
+        return getServerUrl()
     }
 
     fun setServerUrl(url: String) {
@@ -105,6 +105,14 @@ class PreferenceManager(context: Context) {
         _lastSyncFlow.value = 0L
     }
 
+    fun isOnboardingCompleted(): Boolean {
+        return prefs.getBoolean(KEY_ONBOARDING_COMPLETED, false)
+    }
+
+    fun setOnboardingCompleted(completed: Boolean) {
+        prefs.edit().putBoolean(KEY_ONBOARDING_COMPLETED, completed).apply()
+    }
+
     companion object {
         const val DEFAULT_SERVER_URL = "https://ais-dev-etjoqfdf2ox4fsj5y37jnh-77493896896.europe-west3.run.app"
         private const val KEY_SERVER_URL = "server_url"
@@ -115,5 +123,6 @@ class PreferenceManager(context: Context) {
         private const val KEY_AUTH_TOKEN = "auth_token"
         private const val KEY_IS_PAIRED = "is_paired"
         private const val KEY_LAST_SYNC_TIME = "last_sync_time"
+        private const val KEY_ONBOARDING_COMPLETED = "onboarding_completed"
     }
 }
