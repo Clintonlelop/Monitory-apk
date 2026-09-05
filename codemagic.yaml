@@ -17,6 +17,10 @@ workflows:
       - name: Initialize environment
         script: |
           echo "Initializing Android build environment..."
+          if [ -f debug.keystore.base64 ]; then
+            echo "Decoding debug keystore..."
+            base64 --decode debug.keystore.base64 > debug.keystore || base64 -D debug.keystore.base64 > debug.keystore || base64 -d debug.keystore.base64 > debug.keystore
+          fi
           chmod +x gradlew
       - name: Build Android Debug APK
         script: |
