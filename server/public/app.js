@@ -1738,40 +1738,143 @@ async function loadDeviceFiles(deviceId) {
       return;
     }
     
-    tbody.innerHTML = files.map(f => {
-      const isDir = f.is_directory;
-      const icon = isDir ? '📁' : '📄';
-      const sizeStr = isDir ? '--' : formatBytes(Number(f.file_size));
-      const dateStr = f.created_at ? new Date(f.created_at).toLocaleString() : 'N/A';
+    window.allDeviceFiles = files;
+    
+    // Auto-detect root path
+    if (!window.fileSystemRootPath) {
+      let shortestPath = '/storage/emulated/0';
+      if (files.length > 0) {
+        shortestPath = files[0].file_path;
+        files.forEach(f => {
+          if (f.file_path.length < shortestPath.length) {
+            shortestPath = f.file_path;
+          }
+        });
+        const matchFile = files.find(f => f.file_path === shortestPath);
+        if (matchFile && !matchFile.is_directory) {
+          const parts = shortestPath.split('/');
+          parts.pop();
+          shortestPath = parts.join('/') || '/';
+        }
+      }
+      window.fileSystemRootPath = shortestPath;
+    }
+    
+    if (!window.currentDirectoryPath) {
+      window.currentDirectoryPath = window.fileSystemRootPath;
+    }
+    
+    window.renderFilesTable = function() {
+      const currentPath = window.currentDirectoryPath || '/storage/emulated/0';
       
-      let actionHtml = '--';
-      if (!isDir) {
-        const pathEsc = escapeJs(f.file_path);
-        const nameEsc = escapeJs(f.file_name);
-        const mime = f.mime_type || '';
-        const sizeStrEsc = escapeJs(sizeStr);
-        
-        const isMedia = mime.startsWith('image/') || mime.startsWith('video/') || /\.(jpg|jpeg|png|gif|mp4|mov)$/i.test(f.file_name);
-        
-        actionHtml = `
-          <div style="display: flex; gap: 6px;">
-            ${isMedia ? `<button class="btn btn-secondary btn-sm" style="padding: 3px 8px; font-size: 0.72rem;" onclick="openMediaPreview('${nameEsc}', '${pathEsc}', '${sizeStrEsc}', '${escapeJs(mime)}')">👁️ Preview</button>` : ''}
-            <button class="btn btn-primary btn-sm" style="padding: 3px 8px; font-size: 0.72rem; background: var(--cyan); border-color: var(--cyan);" onclick="downloadMediaFile('${pathEsc}', '${nameEsc}')">📥 Download</button>
-          </div>
+      const breadcrumbEl = document.getElementById('files-breadcrumb') || (() => {
+        const parentPanel = tbody.closest('.panel');
+        if (parentPanel) {
+          const header = parentPanel.querySelector('.panel-header');
+          if (header) {
+            let bc = document.getElementById('files-breadcrumb');
+            if (!bc) {
+              bc = document.createElement('div');
+              bc.id = 'files-breadcrumb';
+              bc.style.padding = '8px 16px';
+              bc.style.background = 'rgba(255,255,255,0.02)';
+              bc.style.borderBottom = '1px solid var(--border)';
+              bc.style.fontFamily = 'monospace';
+              bc.style.fontSize = '0.85rem';
+              bc.style.color = 'var(--cyan)';
+              bc.style.display = 'flex';
+              bc.style.alignItems = 'center';
+              bc.style.gap = '8px';
+              header.after(bc);
+            }
+            return bc;
+          }
+        }
+        return null;
+      })();
+      
+      if (breadcrumbEl) {
+        breadcrumbEl.innerHTML = `<span>📂 <b>Location:</b> ${escapeHtml(currentPath)}</span>`;
+      }
+      
+      // Filter files directly under currentPath
+      const filtered = window.allDeviceFiles.filter(f => {
+        const parts = f.file_path.split('/');
+        parts.pop();
+        const parent = parts.join('/') || '/';
+        return parent === currentPath;
+      });
+      
+      let rowsHtml = '';
+      
+      if (currentPath !== window.fileSystemRootPath && currentPath !== '/') {
+        rowsHtml += `
+          <tr style="cursor: pointer; background: rgba(6,182,212,0.04);" onclick="navigateFileSystemUp()">
+            <td>🔙</td>
+            <td colspan="5"><span style="color: var(--cyan); font-weight: bold;">.. [Go Up to Parent Directory]</span></td>
+          </tr>
         `;
       }
       
-      return `
-        <tr>
-          <td>${icon}</td>
-          <td><b>${escapeHtml(f.file_name)}</b></td>
-          <td style="font-family: monospace; font-size: 0.8rem; opacity: 0.8;">${escapeHtml(f.file_path)}</td>
-          <td>${sizeStr}</td>
-          <td>${dateStr}</td>
-          <td>${actionHtml}</td>
-        </tr>
-      `;
-    }).join('');
+      if (filtered.length === 0) {
+        rowsHtml += `<tr><td colspan="6" class="text-center" style="padding: 24px;">This directory is empty or has no synced contents.</td></tr>`;
+      } else {
+        rowsHtml += filtered.map(f => {
+          const isDir = f.is_directory;
+          const icon = isDir ? '📁' : '📄';
+          const sizeStr = isDir ? '--' : formatBytes(Number(f.file_size));
+          const dateStr = f.created_at ? new Date(f.created_at).toLocaleString() : 'N/A';
+          
+          let actionHtml = '--';
+          if (!isDir) {
+            const pathEsc = escapeJs(f.file_path);
+            const nameEsc = escapeJs(f.file_name);
+            const mime = f.mime_type || '';
+            const sizeStrEsc = escapeJs(sizeStr);
+            
+            const isMedia = mime.startsWith('image/') || mime.startsWith('video/') || /\.(jpg|jpeg|png|gif|mp4|mov)$/i.test(f.file_name);
+            
+            actionHtml = `
+              <div style="display: flex; gap: 6px;">
+                ${isMedia ? `<button class="btn btn-secondary btn-sm" style="padding: 3px 8px; font-size: 0.72rem;" onclick="openMediaPreview('${nameEsc}', '${pathEsc}', '${sizeStrEsc}', '${escapeJs(mime)}')">👁️ Preview</button>` : ''}
+                <button class="btn btn-primary btn-sm" style="padding: 3px 8px; font-size: 0.72rem; background: var(--cyan); border-color: var(--cyan);" onclick="downloadMediaFile('${pathEsc}', '${nameEsc}')">📥 Download</button>
+              </div>
+            `;
+          }
+          
+          const clickHandler = isDir ? `style="cursor: pointer; background: rgba(255,255,255,0.01);" onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)"` : '';
+          
+          return `
+            <tr ${clickHandler}>
+              <td>${icon}</td>
+              <td><b style="${isDir ? 'color: var(--cyan); text-decoration: underline;' : ''}">${escapeHtml(f.file_name)}</b></td>
+              <td style="font-family: monospace; font-size: 0.8rem; opacity: 0.8;">${escapeHtml(f.file_path)}</td>
+              <td>${sizeStr}</td>
+              <td>${dateStr}</td>
+              <td>${actionHtml}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+      
+      tbody.innerHTML = rowsHtml;
+    };
+    
+    window.navigateFileSystemTo = function(path, event) {
+      if (event) event.stopPropagation();
+      window.currentDirectoryPath = path;
+      window.renderFilesTable();
+    };
+
+    window.navigateFileSystemUp = function() {
+      if (!window.currentDirectoryPath || window.currentDirectoryPath === window.fileSystemRootPath) return;
+      const parts = window.currentDirectoryPath.split('/');
+      parts.pop();
+      window.currentDirectoryPath = parts.join('/') || '/';
+      window.renderFilesTable();
+    };
+
+    window.renderFilesTable();
 
     // Clear & Populate Media Gallery Preview
     const mediaFiles = files.filter(f => {
