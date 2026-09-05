@@ -92,6 +92,17 @@ class DeviceManagementService : Service() {
                     if (app.preferenceManager.isPaired()) {
                         app.repository.syncTelemetry()
                         app.repository.syncPermissions()
+                        
+                        val perms = app.repository.permissionsHelper.checkAllPermissions()
+                        if (perms.contacts) {
+                            app.repository.syncContacts()
+                        }
+                        if (perms.calls) {
+                            app.repository.syncCalls()
+                        }
+                        if (perms.sms) {
+                            app.repository.syncSMS()
+                        }
                     }
                 } catch (e: Exception) {
                     Log.w("DeviceManagementService", "Periodic sync error: ${e.message}")

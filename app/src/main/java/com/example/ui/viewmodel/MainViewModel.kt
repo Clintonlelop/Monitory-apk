@@ -15,8 +15,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 sealed class Screen {
+    data object Onboarding : Screen()
     data object Auth : Screen()
-    data object Activation : Screen()
+    data object SetupWizard : Screen()
     data object Dashboard : Screen()
     data object Privacy : Screen()
 }
@@ -44,7 +45,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _currentScreen = MutableStateFlow<Screen>(
-        if (prefs.isPaired()) Screen.Dashboard else Screen.Auth
+        if (prefs.isPaired() && prefs.isSetupCompleted()) {
+            Screen.Dashboard
+        } else if (!prefs.isOnboardingCompleted()) {
+            Screen.Onboarding
+        } else if (prefs.isPaired() && !prefs.isSetupCompleted()) {
+            Screen.SetupWizard
+        } else {
+            Screen.Auth
+        }
     )
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
 
@@ -121,7 +130,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val result = repo.signInAndConnect(targetUrl, email, pass)
             result.onSuccess { msg ->
                 _uiState.value = UiState.Success(msg)
-                _currentScreen.value = Screen.Activation
+                _currentScreen.value = Screen.SetupWizard
             }.onFailure { err ->
                 // If login failed because user not registered yet, give helpful message
                 _uiState.value = UiState.Error(err.message ?: "Login failed. Click 'Create Account' if this is your first time.")
@@ -145,11 +154,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val result = repo.registerAndConnect(targetUrl, email, pass, username.value)
             result.onSuccess { msg ->
                 _uiState.value = UiState.Success(msg)
-                _currentScreen.value = Screen.Activation
+                _currentScreen.value = Screen.SetupWizard
             }.onFailure { err ->
                 _uiState.value = UiState.Error(err.message ?: "Registration failed")
             }
         }
+    }
+
+    fun completeOnboarding() {
+        prefs.setOnboardingCompleted(true)
+        _currentScreen.value = Screen.Auth
+    }
+
+    fun completeSetup() {
+        prefs.setSetupCompleted(true)
+        activateDevice()
     }
 
     fun activateDevice() {

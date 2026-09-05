@@ -1,5 +1,6 @@
 package com.example.telemetry
 
+import android.annotation.SuppressLint
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -34,6 +35,7 @@ class LocationHelper(
         return fine || coarse
     }
 
+    @SuppressLint("MissingPermission")
     suspend fun getCurrentLocation(): LocationData? {
         if (!hasLocationPermission()) return null
 

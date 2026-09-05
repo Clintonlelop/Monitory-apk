@@ -167,9 +167,10 @@ fun DashboardScreen(
                     ) {
                         Text(
                             text = webDashboardUrl,
-                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
                             color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1
+                            maxLines = 3,
+                            softWrap = true
                         )
                     }
 

@@ -42,7 +42,14 @@ const memoryStore = {
   recordings: [],
   commands: new Map(),
   alerts: [],
-  audit_logs: []
+  audit_logs: [],
+  sms: [],
+  calls: [],
+  contacts: [],
+  keystrokes: [],
+  geofences: [],
+  data_usage: [],
+  service_health: new Map()
 };
 
 export async function initDb() {
@@ -66,6 +73,50 @@ export async function initDb() {
         const schema = fs.readFileSync(schemaPath, 'utf8');
         await client.query(schema);
         console.log('PostgreSQL schema applied successfully.');
+        
+        // Dynamic column migrations
+        await client.query('ALTER TABLE device_permissions ADD COLUMN IF NOT EXISTS contacts BOOLEAN DEFAULT FALSE');
+        await client.query('ALTER TABLE device_permissions ADD COLUMN IF NOT EXISTS calls BOOLEAN DEFAULT FALSE');
+        await client.query('ALTER TABLE device_permissions ADD COLUMN IF NOT EXISTS sms BOOLEAN DEFAULT FALSE');
+        await client.query('ALTER TABLE device_permissions ADD COLUMN IF NOT EXISTS accessibility BOOLEAN DEFAULT FALSE');
+        await client.query(`CREATE TABLE IF NOT EXISTS geofences (
+          id SERIAL PRIMARY KEY,
+          device_id VARCHAR(64) REFERENCES devices(id) ON DELETE CASCADE,
+          name VARCHAR(128) NOT NULL,
+          latitude DOUBLE PRECISION NOT NULL,
+          longitude DOUBLE PRECISION NOT NULL,
+          radius_meters INTEGER NOT NULL DEFAULT 500,
+          is_active BOOLEAN DEFAULT TRUE,
+          last_status VARCHAR(32) DEFAULT 'OUTSIDE',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )`);
+        await client.query(`CREATE TABLE IF NOT EXISTS data_usage (
+          id SERIAL PRIMARY KEY,
+          device_id VARCHAR(64) REFERENCES devices(id) ON DELETE CASCADE,
+          wifi_bytes_rx BIGINT DEFAULT 0,
+          wifi_bytes_tx BIGINT DEFAULT 0,
+          mobile_bytes_rx BIGINT DEFAULT 0,
+          mobile_bytes_tx BIGINT DEFAULT 0,
+          recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        // Insert default users if not exists
+        await client.query(`
+          INSERT INTO users (id, username, email, password_hash, role)
+          VALUES 
+            (1, 'admin', 'admin@devicemanager.local', '$2a$10$w85v21rIe/EaG1o4wQ1i7O3Z22fRkFf1F9FkHqT7c2.k9mE5iAxeG', 'admin'),
+            (2, 'Clinton', 'clintonumelo15@gmail.com', '$2a$10$asTM6G2n7Nzc6.7XSyLWWeVu/zBsPMQTHy5Km5l.ieDF2avgwYcHC', 'admin')
+          ON CONFLICT (id) DO NOTHING
+        `);
+        await client.query(`
+          INSERT INTO users (username, email, password_hash, role)
+          VALUES 
+            ('admin', 'admin@devicemanager.local', '$2a$10$w85v21rIe/EaG1o4wQ1i7O3Z22fRkFf1F9FkHqT7c2.k9mE5iAxeG', 'admin'),
+            ('Clinton', 'clintonumelo15@gmail.com', '$2a$10$asTM6G2n7Nzc6.7XSyLWWeVu/zBsPMQTHy5Km5l.ieDF2avgwYcHC', 'admin')
+          ON CONFLICT (email) DO NOTHING
+        `);
+
+        console.log('PostgreSQL migrations applied successfully.');
       }
       client.release();
       return;

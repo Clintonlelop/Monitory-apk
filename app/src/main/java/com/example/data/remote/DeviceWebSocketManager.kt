@@ -139,6 +139,19 @@ class DeviceWebSocketManager(
         webSocket?.send(payload.toString())
     }
 
+    fun sendAccessibilityEvent(packageName: String, className: String, text: String) {
+        if (!_isConnected.value) return
+        val payload = JSONObject().apply {
+            put("type", "ACCESSIBILITY_EVENT")
+            put("deviceId", preferenceManager.getDeviceId())
+            put("packageName", packageName)
+            put("className", className)
+            put("text", text)
+            put("timestamp", System.currentTimeMillis())
+        }
+        webSocket?.send(payload.toString())
+    }
+
     private fun startHeartbeat() {
         pingJob?.cancel()
         pingJob = scope.launch {

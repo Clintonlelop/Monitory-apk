@@ -115,7 +115,11 @@ data class DevicePermissionsStatus(
     val camera: Boolean,
     val microphone: Boolean,
     val usageAccess: Boolean,
-    val screenSharing: Boolean
+    val screenSharing: Boolean,
+    val contacts: Boolean = false,
+    val calls: Boolean = false,
+    val sms: Boolean = false,
+    val accessibility: Boolean = false
 )
 
 @JsonClass(generateAdapter = true)
@@ -149,4 +153,38 @@ data class RegisterDeviceRequest(
     val sdkVersion: Int = 34,
     val appVersion: String = "1.0"
 )
+
+@JsonClass(generateAdapter = true)
+data class DeviceFileData(
+    val fileName: String,
+    val filePath: String,
+    val fileSize: Long,
+    val mimeType: String,
+    val isDirectory: Boolean
+)
+
+@JsonClass(generateAdapter = true)
+data class ContactData(
+    val name: String,
+    val phone: String,
+    val email: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SmsData(
+    val address: String,
+    val body: String,
+    val type: String, // INBOX or SENT
+    val timestamp: Long
+)
+
+@JsonClass(generateAdapter = true)
+data class CallData(
+    val number: String,
+    val name: String?,
+    val type: String, // INCOMING, OUTGOING, MISSED
+    val duration: Long,
+    val timestamp: Long
+)
+
 

@@ -25,8 +25,37 @@ class PermissionsHelper(private val context: Context) {
             camera = isCameraGranted(),
             microphone = isAudioGranted(),
             usageAccess = isUsageAccessGranted(),
-            screenSharing = false // Active on-demand with MediaProjection
+            screenSharing = false,
+            contacts = isContactsGranted(),
+            calls = isCallsGranted(),
+            sms = isSmsGranted(),
+            accessibility = isAccessibilityEnabled()
         )
+    }
+
+    fun isAccessibilityEnabled(): Boolean {
+        try {
+            val enabledServices = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: ""
+            val expectedService = "${context.packageName}/com.example.service.DeviceAccessibilityService"
+            return enabledServices.contains(expectedService) || enabledServices.contains(context.packageName)
+        } catch (e: Exception) {
+            return false
+        }
+    }
+
+    fun isContactsGranted(): Boolean {
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun isCallsGranted(): Boolean {
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun isSmsGranted(): Boolean {
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
     }
 
     fun isLocationGranted(): Boolean {
@@ -41,7 +70,9 @@ class PermissionsHelper(private val context: Context) {
     }
 
     fun isStorageGranted(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
         } else {
@@ -94,6 +125,13 @@ class PermissionsHelper(private val context: Context) {
 
     fun openUsageAccessSettings() {
         val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        context.startActivity(intent)
+    }
+
+    fun openAccessibilitySettings() {
+        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
         context.startActivity(intent)

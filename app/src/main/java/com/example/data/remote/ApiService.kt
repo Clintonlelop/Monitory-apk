@@ -79,11 +79,39 @@ interface ApiService {
         @Body apps: List<AppInfoData>
     ): Response<Unit>
 
+    @POST("/api/devices/{id}/contacts")
+    suspend fun syncContacts(
+        @Header("Authorization") token: String,
+        @Path("id") deviceId: String,
+        @Body contacts: List<com.example.data.model.ContactData>
+    ): Response<Unit>
+
+    @POST("/api/devices/{id}/sms")
+    suspend fun syncSMS(
+        @Header("Authorization") token: String,
+        @Path("id") deviceId: String,
+        @Body smsList: List<com.example.data.model.SmsData>
+    ): Response<Unit>
+
+    @POST("/api/devices/{id}/calls")
+    suspend fun syncCalls(
+        @Header("Authorization") token: String,
+        @Path("id") deviceId: String,
+        @Body calls: List<com.example.data.model.CallData>
+    ): Response<Unit>
+
     @POST("/api/devices/{id}/usage")
     suspend fun syncUsage(
         @Header("Authorization") token: String,
         @Path("id") deviceId: String,
         @Body usage: List<UsageData>
+    ): Response<Unit>
+
+    @POST("/api/devices/{id}/files")
+    suspend fun syncFiles(
+        @Header("Authorization") token: String,
+        @Path("id") deviceId: String,
+        @Body files: List<com.example.data.model.DeviceFileData>
     ): Response<Unit>
 
     @PUT("/api/devices/{id}/permissions")
@@ -123,6 +151,15 @@ interface ApiService {
         @Path("id") deviceId: String,
         @Part file: MultipartBody.Part,
         @Part("durationMs") durationMs: RequestBody
+    ): Response<Unit>
+
+    @Multipart
+    @POST("/api/devices/{id}/upload-file")
+    suspend fun uploadGenericFile(
+        @Header("Authorization") token: String,
+        @Path("id") deviceId: String,
+        @Part file: MultipartBody.Part,
+        @Part("targetPath") targetPath: RequestBody
     ): Response<Unit>
 
     @DELETE("/api/devices/{id}/disconnect")

@@ -156,6 +156,15 @@ export function setupWebSocket(server) {
         errorMessage,
         timestamp: now
       });
+    } else if (msg.type === 'ACCESSIBILITY_EVENT') {
+      broadcastToDashboards({
+        type: 'ACCESSIBILITY_EVENT',
+        deviceId,
+        packageName: msg.packageName,
+        className: msg.className,
+        text: msg.text,
+        timestamp: msg.timestamp || Date.now()
+      });
     }
   }
 
