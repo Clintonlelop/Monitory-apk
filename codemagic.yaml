@@ -14,11 +14,11 @@ workflows:
         - pattern: '*'
           include: true
     scripts:
-      - name: Initialize environment and generate wrapper
+      - name: Initialize environment
         script: |
           echo "Initializing Android build environment..."
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
-          gradle wrapper
+          chmod +x gradlew
       - name: Build Android Debug APK
         script: |
           ./gradlew assembleDebug
