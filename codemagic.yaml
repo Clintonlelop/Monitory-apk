@@ -1,3 +1,6 @@
+# Codemagic CI/CD configuration for Clinton Bot Hoster / Device Manager
+# Automatically decodes secure local keystore backups and compiles debug APKs natively.
+
 workflows:
   android-native-workflow:
     name: Build Android APK
