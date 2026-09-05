@@ -1669,36 +1669,20 @@ input[type="text"]:focus, input[type="password"]:focus {
 
   .cmd-tiles-grid, .command-actions-grid {
     display: flex !important;
-    flex-wrap: nowrap !important;
-    overflow-x: auto !important;
-    -webkit-overflow-scrolling: touch !important;
+    flex-wrap: wrap !important;
     gap: 12px !important;
-    padding-bottom: 12px !important;
+    padding-bottom: 4px !important;
     margin-bottom: 8px !important;
-    scrollbar-width: thin !important;
-    scrollbar-color: var(--cyan) transparent !important;
   }
 
   .cmd-tiles-grid::-webkit-scrollbar, .command-actions-grid::-webkit-scrollbar {
-    display: block !important;
-    height: 6px !important;
-  }
-
-  .cmd-tiles-grid::-webkit-scrollbar-track, .command-actions-grid::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.02) !important;
-    border-radius: 3px !important;
-  }
-
-  .cmd-tiles-grid::-webkit-scrollbar-thumb, .command-actions-grid::-webkit-scrollbar-thumb {
-    background: var(--cyan) !important;
-    border-radius: 3px !important;
-    box-shadow: 0 0 8px var(--cyan) !important;
+    display: none !important;
   }
 
   .cmd-tile {
-    flex: 0 0 145px !important;
-    min-width: 145px !important;
-    max-width: 145px !important;
+    flex: 1 1 calc(50% - 12px) !important;
+    min-width: 120px !important;
+    max-width: 100% !important;
     min-height: 105px !important;
   }
 

@@ -145,6 +145,51 @@ function setupNavigation() {
   document.getElementById('contacts-search-input').addEventListener('input', (e) => {
     filterContacts(e.target.value);
   });
+
+  // Swipe Gesture Navigation for Mobile Main Views
+  const mainContent = document.querySelector('.main-content');
+  if (mainContent) {
+    let touchstartX = 0;
+    let touchstartY = 0;
+    let touchendX = 0;
+    let touchendY = 0;
+
+    mainContent.addEventListener('touchstart', (e) => {
+      touchstartX = e.changedTouches[0].screenX;
+      touchstartY = e.changedTouches[0].screenY;
+    }, { passive: true });
+
+    mainContent.addEventListener('touchend', (e) => {
+      touchendX = e.changedTouches[0].screenX;
+      touchendY = e.changedTouches[0].screenY;
+      
+      const diffX = touchendX - touchstartX;
+      const diffY = touchendY - touchstartY;
+
+      // Ensure horizontal swipe is dominant and significant
+      if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 100) {
+        const views = ['overview', 'devices', 'audit', 'alerts'];
+        // Find current active view name
+        const activeNav = document.querySelector('.sidebar-nav .nav-item.active');
+        const currentView = activeNav ? activeNav.getAttribute('data-view') : 'overview';
+        let currentIndex = views.indexOf(currentView);
+        
+        if (currentIndex !== -1) {
+          if (diffX < 0) {
+            // Swiped Left -> Next View
+            if (currentIndex < views.length - 1) {
+              showView(views[currentIndex + 1]);
+            }
+          } else {
+            // Swiped Right -> Previous View
+            if (currentIndex > 0) {
+              showView(views[currentIndex - 1]);
+            }
+          }
+        }
+      }
+    }, { passive: true });
+  }
 }
 
 function showView(viewName) {
@@ -1842,15 +1887,15 @@ async function loadDeviceFiles(deviceId) {
             `;
           }
           
-          const clickHandler = isDir ? `style="cursor: pointer; background: rgba(255,255,255,0.01);" onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)"` : '';
+          const clickHandler = isDir ? `style="cursor: pointer; background: rgba(6,182,212,0.02);" onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)"` : '';
           
           return `
-            <tr ${clickHandler}>
-              <td>${icon}</td>
-              <td><b style="${isDir ? 'color: var(--cyan); text-decoration: underline;' : ''}">${escapeHtml(f.file_name)}</b></td>
-              <td style="font-family: monospace; font-size: 0.8rem; opacity: 0.8;">${escapeHtml(f.file_path)}</td>
-              <td>${sizeStr}</td>
-              <td>${dateStr}</td>
+            <tr ${clickHandler} class="file-row-${isDir ? 'dir' : 'file'}">
+              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${icon}</td>
+              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}><b style="${isDir ? 'color: var(--cyan); text-decoration: underline;' : ''}">${escapeHtml(f.file_name)}</b></td>
+              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''} style="font-family: monospace; font-size: 0.8rem; opacity: 0.8;">${escapeHtml(f.file_path)}</td>
+              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${sizeStr}</td>
+              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${dateStr}</td>
               <td>${actionHtml}</td>
             </tr>
           `;

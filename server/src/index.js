@@ -1557,6 +1557,9 @@ app.get('/api/alerts', verifyToken, async (req, res) => {
 
 // Catch-all for single-page application routing
 app.get('*', (req, res) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 

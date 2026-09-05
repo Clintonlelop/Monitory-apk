@@ -27,10 +27,10 @@ class ApiClient(private val preferenceManager: PreferenceManager) {
                 val request = chain.request()
                 val response = chain.proceed(request)
 
-                // Detect if server returned an HTML error page instead of JSON
+                // Detect if server returned an HTML error page or standard webpage instead of JSON
                 val contentType = response.header("Content-Type") ?: ""
-                if (!response.isSuccessful && contentType.contains("text/html")) {
-                    throw java.io.IOException("Server returned HTML error (${response.code}). Please check server connection.")
+                if (contentType.contains("text/html")) {
+                    throw java.io.IOException("The Server URL points to a website (HTML) instead of a backend API. Please make sure you are pointing to your Node.js backend API URL (e.g., on Render/Railway), not a frontend hosting site (like Vercel/Netlify).")
                 }
 
                 response

