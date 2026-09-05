@@ -7,6 +7,10 @@ workflows:
         - keystore_credentials
       android_signing:
         - reference_name: default_signing
+          keystore: $KEYSTORE_BASE64
+          keystore_password: $KEYSTORE_PASSWORD
+          keystore_alias: $KEY_ALIAS
+          keystore_alias_password: $KEY_ALIAS_PASSWORD
       vars:
         GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx2048m -XX:+HeapDumpOnOutOfMemoryError"
       node: 18
