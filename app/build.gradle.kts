@@ -10,17 +10,18 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.devicemanager"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
     applicationId = "com.aistudio.devicemanager.admzxp"
-    minSdk = 24
+    minSdk = 26
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://ais-dev-etjoqfdf2ox4fsj5y37jnh-77493896896.europe-west3.run.app\"")
   }
 
   signingConfigs {
@@ -49,11 +50,12 @@ android {
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
   }
   compileOptions {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
   }
   buildFeatures {
     compose = true
+    viewBinding = true
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
@@ -123,4 +125,16 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+
+  // Added for DeviceManager (imported codebase)
+  implementation("androidx.appcompat:appcompat:1.6.1")
+  implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+  implementation("androidx.recyclerview:recyclerview:1.3.2")
+  implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+  implementation("com.google.android.material:material:1.11.0")
+  implementation("androidx.lifecycle:lifecycle-service:2.7.0")
+  implementation("androidx.fragment:fragment-ktx:1.6.2")
+  implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+  implementation("androidx.work:work-runtime-ktx:2.9.0")
+  implementation("com.google.code.gson:gson:2.10.1")
 }
