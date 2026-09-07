@@ -61,6 +61,9 @@ class MainActivity : ComponentActivity() {
         app = application as DeviceManagerApp
         viewModel = ViewModelProvider(this)[MainViewModel::class.java]
 
+        // Set highest available refresh rate (e.g. 120Hz / 120 FPS)
+        Extensions.setHighestRefreshRate(window)
+
         setContent {
             DeviceManagerTheme {
                 MainDashboardScreen()
@@ -146,6 +149,50 @@ class MainActivity : ComponentActivity() {
                 // Connection Status Orb Pill
                 item {
                     ConnectionStatusPill(isOnline = isOnline)
+                }
+
+                // Screen Refresh Rate & Smoothness Pill
+                item {
+                    val refreshRate = Extensions.getCurrentRefreshRate(context)
+                    val fpsText = if (refreshRate > 90f) "120 FPS Flawless Mode Active" else if (refreshRate > 60f) "90 FPS Ultra Smooth Mode Active" else "60 FPS Standard Mode Active"
+                    val hzColor = if (refreshRate > 60f) Color(0xFF00E676) else MaterialTheme.colorScheme.primary
+                    
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = hzColor.copy(alpha = 0.08f)
+                        ),
+                        border = BorderStroke(1.dp, hzColor.copy(alpha = 0.2f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Bolt,
+                                contentDescription = "Refresh Rate",
+                                tint = hzColor,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Screen Refresh Rate: ${refreshRate.toInt()} Hz (${refreshRate.toInt()} FPS)",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = hzColor
+                                )
+                                Text(
+                                    text = fpsText,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
 
                 // Grid stats

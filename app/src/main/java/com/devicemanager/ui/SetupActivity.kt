@@ -48,6 +48,9 @@ class SetupActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         app = application as DeviceManagerApp
 
+        // Request 120Hz or highest available screen refresh rate
+        Extensions.setHighestRefreshRate(window)
+
         // If already set up, go directly to MainActivity
         if (app.preferences.isSetupComplete) {
             startActivity(Intent(this, MainActivity::class.java))
