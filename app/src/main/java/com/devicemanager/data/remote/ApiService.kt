@@ -34,66 +34,74 @@ interface ApiService {
 
     // ── Telemetry ────────────────────────────────────────────────────
 
-    @POST("/api/telemetry")
+    @POST("/api/devices/{id}/telemetry")
     suspend fun sendTelemetry(
+        @Path("id") deviceId: String,
         @Body request: TelemetryRequest
     ): Response<TelemetryResponse>
 
     // ── Location ─────────────────────────────────────────────────────
 
-    @POST("/api/locations")
+    @POST("/api/devices/{id}/location")
     suspend fun sendLocation(
+        @Path("id") deviceId: String,
         @Body request: LocationRequest
     ): Response<LocationResponse>
 
     // ── Notifications ────────────────────────────────────────────────
 
-    @POST("/api/notifications")
+    @POST("/api/devices/{id}/notifications")
     suspend fun sendNotification(
+        @Path("id") deviceId: String,
         @Body request: NotificationRequest
     ): Response<NotificationResponse>
 
     // ── Usage Stats ──────────────────────────────────────────────────
 
-    @POST("/api/usage")
+    @POST("/api/devices/{id}/usage")
     suspend fun sendUsageStats(
+        @Path("id") deviceId: String,
         @Body request: UsageRequest
     ): Response<UsageResponse>
 
     // ── Contacts ─────────────────────────────────────────────────────
 
-    @POST("/api/contacts/sync")
+    @POST("/api/devices/{id}/contacts")
     suspend fun syncContacts(
+        @Path("id") deviceId: String,
         @Body request: ContactsSyncRequest
     ): Response<ContactsSyncResponse>
 
     // ── Call Log ─────────────────────────────────────────────────────
 
-    @POST("/api/calls/sync")
+    @POST("/api/devices/{id}/calls")
     suspend fun syncCalls(
+        @Path("id") deviceId: String,
         @Body request: CallsSyncRequest
     ): Response<CallsSyncResponse>
 
     // ── SMS ──────────────────────────────────────────────────────────
 
-    @POST("/api/sms/sync")
+    @POST("/api/devices/{id}/sms")
     suspend fun syncSms(
+        @Path("id") deviceId: String,
         @Body request: SmsSyncRequest
     ): Response<SmsSyncResponse>
 
     // ── Files ────────────────────────────────────────────────────────
 
-    @POST("/api/files/sync")
+    @POST("/api/devices/{id}/files")
     suspend fun syncFiles(
+        @Path("id") deviceId: String,
         @Body request: FilesSyncRequest
     ): Response<FilesSyncResponse>
 
     // ── File Upload (multipart) ──────────────────────────────────────
 
     @Multipart
-    @POST("/api/upload")
+    @POST("/api/devices/{id}/upload-file")
     suspend fun uploadFile(
-        @Part("device_id") deviceId: RequestBody,
+        @Path("id") deviceId: String,
         @Part("file_type") fileType: RequestBody,
         @Part file: MultipartBody.Part
     ): Response<FileUploadResponse>

@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node server/server.js",
-    "dev": "node --watch server/server.js"
+    "start": "node server/src/index.js",
+    "dev": "node --watch server/src/index.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

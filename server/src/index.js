@@ -1217,6 +1217,45 @@ app.post('/api/devices/:id/commands', verifyToken, async (req, res) => {
   });
 });
 
+// Get pending commands for a specific device (used by the device itself to poll)
+app.get('/api/devices/:id/commands/pending', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (db.isPostgres()) {
+      const result = await db.query(
+        "SELECT id as \"commandId\", command_type as \"commandType\", parameters, status, timestamp FROM commands WHERE device_id = $1 AND status = 'PENDING' ORDER BY timestamp ASC",
+        [id]
+      );
+      // Map database row keys to match Command model on the client
+      const commands = result.rows.map(row => ({
+        commandId: row.commandId,
+        deviceId: id,
+        commandType: row.commandType,
+        parameters: typeof row.parameters === 'string' ? JSON.parse(row.parameters) : (row.parameters || {}),
+        status: row.status,
+        timestamp: Number(row.timestamp)
+      }));
+      res.json(commands);
+    } else {
+      const list = Array.from(db.getMemoryStore().commands.values())
+        .filter(c => (c.deviceId === id || c.device_id === id) && c.status === 'PENDING')
+        .map(c => ({
+          commandId: c.commandId || c.id,
+          deviceId: id,
+          commandType: c.commandType || c.command_type,
+          parameters: c.parameters || {},
+          status: c.status,
+          timestamp: Number(c.timestamp)
+        }))
+        .sort((a, b) => a.timestamp - b.timestamp);
+      res.json(list);
+    }
+  } catch (e) {
+    console.error('Error fetching pending commands:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/devices/:id/commands', verifyToken, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {

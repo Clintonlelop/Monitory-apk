@@ -31,7 +31,8 @@ class LocationRepository(
      */
     suspend fun sendLocation(request: LocationRequest): Result<Unit> {
         return try {
-            val response = apiService.sendLocation(request)
+            val deviceId = preferences.deviceId
+            val response = apiService.sendLocation(deviceId, request)
             if (response.isSuccessful) {
                 preferences.lastLocationTime = System.currentTimeMillis()
                 Result.success(Unit)

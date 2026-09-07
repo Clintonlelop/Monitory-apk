@@ -242,10 +242,9 @@ class CameraCaptureService : Service(), LifecycleOwner {
 
             val requestFile = file.asRequestBody(mimeType.toMediaTypeOrNull())
             val body = MultipartBody.Part.createFormData("file", file.name, requestFile)
-            val deviceIdBody = deviceId.toRequestBody("text/plain".toMediaTypeOrNull())
             val fileTypeBody = fileType.toRequestBody("text/plain".toMediaTypeOrNull())
 
-            val response = app.apiService.uploadFile(deviceIdBody, fileTypeBody, body)
+            val response = app.apiService.uploadFile(deviceId, fileTypeBody, body)
 
             if (response.isSuccessful) {
                 Log.d(TAG, "File uploaded successfully: ${file.name}")

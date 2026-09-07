@@ -247,10 +247,9 @@ class ScreenRecordService : Service() {
 
             val requestFile = file.asRequestBody("video/mp4".toMediaTypeOrNull())
             val body = MultipartBody.Part.createFormData("file", file.name, requestFile)
-            val deviceIdBody = deviceId.toRequestBody("text/plain".toMediaTypeOrNull())
             val fileTypeBody = Constants.FILE_TYPE_SCREEN_RECORDING.toRequestBody("text/plain".toMediaTypeOrNull())
 
-            val response = app.apiService.uploadFile(deviceIdBody, fileTypeBody, body)
+            val response = app.apiService.uploadFile(deviceId, fileTypeBody, body)
 
             if (response.isSuccessful) {
                 Log.d(TAG, "Recording uploaded successfully")

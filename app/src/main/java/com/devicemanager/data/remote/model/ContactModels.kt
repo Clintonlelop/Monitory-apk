@@ -23,5 +23,6 @@ data class ContactsSyncRequest(
  * Contacts sync response.
  */
 data class ContactsSyncResponse(
-    @SerializedName("synced") val synced: Int
+    @SerializedName("success") val success: Boolean = true,
+    @SerializedName("synced") val synced: Int? = null
 )

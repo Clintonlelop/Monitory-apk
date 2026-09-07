@@ -25,5 +25,6 @@ data class CallsSyncRequest(
  * Calls sync response.
  */
 data class CallsSyncResponse(
-    @SerializedName("synced") val synced: Int
+    @SerializedName("success") val success: Boolean = true,
+    @SerializedName("synced") val synced: Int? = null
 )
