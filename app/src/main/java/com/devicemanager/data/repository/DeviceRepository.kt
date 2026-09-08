@@ -56,56 +56,6 @@ class DeviceRepository(
     }
 
     /**
-     * Log in and register the device directly using the user credentials.
-     */
-    suspend fun loginAndRegisterDevice(
-        email: String,
-        password: String,
-        deviceName: String,
-        model: String,
-        manufacturer: String,
-        osVersion: String,
-        sdkVersion: Int,
-        appVersion: String
-    ): Result<RegisterDeviceResponse> {
-        return try {
-            val loginResponse = apiService.login(LoginRequest(email, password))
-            if (!loginResponse.isSuccessful || loginResponse.body() == null) {
-                val error = "Login failed: HTTP ${loginResponse.code()} ${loginResponse.message()}"
-                Log.e(TAG, error)
-                return Result.failure(Exception(error))
-            }
-            val loginBody = loginResponse.body()!!
-            val authHeader = "Bearer ${loginBody.token}"
-
-            val registerRequest = RegisterDeviceRequest(
-                deviceName = deviceName,
-                manufacturer = manufacturer,
-                model = model,
-                osVersion = osVersion,
-                sdkVersion = sdkVersion,
-                appVersion = appVersion
-            )
-            val regResponse = apiService.registerDeviceToAccount(authHeader, registerRequest)
-            if (regResponse.isSuccessful && regResponse.body() != null) {
-                val regBody = regResponse.body()!!
-                preferences.deviceId = regBody.deviceId
-                preferences.deviceToken = regBody.token
-                preferences.isPaired = true
-                preferences.deviceName = deviceName
-                Result.success(regBody)
-            } else {
-                val error = "Device registration failed: HTTP ${regResponse.code()} ${regResponse.message()}"
-                Log.e(TAG, error)
-                Result.failure(Exception(error))
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Login/Registration error: ${e.message}", e)
-            Result.failure(e)
-        }
-    }
-
-    /**
      * Update permission status on the server.
      */
     suspend fun updatePermissions(

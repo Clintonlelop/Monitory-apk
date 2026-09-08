@@ -90,12 +90,12 @@ object Extensions {
     /**
      * Convert WebSocket URL from HTTP base URL.
      */
-    fun toWebSocketUrl(baseUrl: String, deviceId: String): String {
+    fun toWebSocketUrl(baseUrl: String, deviceToken: String): String {
         val wsBase = baseUrl
             .replace("https://", "wss://")
             .replace("http://", "ws://")
             .trimEnd('/')
-        return "$wsBase/ws/device?deviceId=$deviceId"
+        return "$wsBase${Constants.WS_PATH}?device_token=$deviceToken"
     }
 
     /**
@@ -103,56 +103,5 @@ object Extensions {
      */
     fun normalizeServerUrl(url: String): String {
         return url.trim().trimEnd('/')
-    }
-
-    /**
-     * Programmatically request the highest supported refresh rate (e.g. 120Hz) for the window.
-     */
-    fun setHighestRefreshRate(window: android.view.Window) {
-        try {
-            val context = window.context
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val display = context.display ?: return
-                val modes = display.supportedModes
-                if (modes.isNotEmpty()) {
-                    val highestMode = modes.maxByOrNull { it.refreshRate }
-                    if (highestMode != null) {
-                        val params = window.attributes
-                        params.preferredDisplayModeId = highestMode.modeId
-                        window.attributes = params
-                    }
-                }
-            } else {
-                val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager
-                val display = windowManager?.defaultDisplay
-                val modes = display?.supportedModes
-                if (modes != null && modes.isNotEmpty()) {
-                    val highestMode = modes.maxByOrNull { it.refreshRate }
-                    if (highestMode != null) {
-                        val params = window.attributes
-                        params.preferredDisplayModeId = highestMode.modeId
-                        window.attributes = params
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("Extensions", "Failed to set high refresh rate: ${e.message}")
-        }
-    }
-
-    /**
-     * Get the current display refresh rate.
-     */
-    fun getCurrentRefreshRate(context: Context): Float {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                context.display?.refreshRate ?: 60f
-            } else {
-                val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager
-                windowManager?.defaultDisplay?.refreshRate ?: 60f
-            }
-        } catch (e: Exception) {
-            60f
-        }
     }
 }

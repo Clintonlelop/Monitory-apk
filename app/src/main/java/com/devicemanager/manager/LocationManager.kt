@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat
 import com.devicemanager.data.remote.model.LocationRequest
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -86,7 +87,7 @@ class LocationManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     private suspend fun getCurrentLocationSingle(): Location? =
         suspendCancellableCoroutine { cont ->
-            val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
+            val locationRequest = LocationRequest.Builder(
                 Priority.PRIORITY_HIGH_ACCURACY,
                 10000L
             ).apply {

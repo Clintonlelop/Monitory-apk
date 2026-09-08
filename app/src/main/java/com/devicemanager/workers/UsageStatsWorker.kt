@@ -42,8 +42,7 @@ class UsageStatsWorker(
             }
 
             val request = UsageRequest(usage = usage)
-            val deviceId = app.preferences.deviceId
-            val response = app.apiService.sendUsageStats(deviceId, request)
+            val response = app.apiService.sendUsageStats(request)
 
             if (response.isSuccessful) {
                 Log.d(TAG, "Usage stats uploaded: ${usage.size} apps")

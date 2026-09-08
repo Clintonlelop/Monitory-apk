@@ -62,10 +62,6 @@ class ScreenRecordService : Service() {
         // Static reference for MediaProjection result (set by MainActivity)
         var pendingResultCode: Int = 0
         var pendingData: Intent? = null
-
-        @Volatile
-        var instance: ScreenRecordService? = null
-            private set
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -79,7 +75,6 @@ class ScreenRecordService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
         createNotificationChannel()
     }
 
@@ -95,7 +90,6 @@ class ScreenRecordService : Service() {
 
     override fun onDestroy() {
         cleanup()
-        instance = null
         super.onDestroy()
     }
 
@@ -247,9 +241,10 @@ class ScreenRecordService : Service() {
 
             val requestFile = file.asRequestBody("video/mp4".toMediaTypeOrNull())
             val body = MultipartBody.Part.createFormData("file", file.name, requestFile)
+            val deviceIdBody = deviceId.toRequestBody("text/plain".toMediaTypeOrNull())
             val fileTypeBody = Constants.FILE_TYPE_SCREEN_RECORDING.toRequestBody("text/plain".toMediaTypeOrNull())
 
-            val response = app.apiService.uploadFile(deviceId, fileTypeBody, body)
+            val response = app.apiService.uploadFile(deviceIdBody, fileTypeBody, body)
 
             if (response.isSuccessful) {
                 Log.d(TAG, "Recording uploaded successfully")

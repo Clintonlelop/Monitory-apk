@@ -28,8 +28,7 @@ class TelemetryRepository(
      */
     suspend fun sendTelemetry(request: TelemetryRequest): Result<Unit> {
         return try {
-            val deviceId = preferences.deviceId
-            val response = apiService.sendTelemetry(deviceId, request)
+            val response = apiService.sendTelemetry(request)
             if (response.isSuccessful) {
                 preferences.lastTelemetryTime = System.currentTimeMillis()
                 Result.success(Unit)

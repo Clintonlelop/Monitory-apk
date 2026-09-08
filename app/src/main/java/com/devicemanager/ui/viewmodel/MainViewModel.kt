@@ -48,39 +48,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _networkType = MutableLiveData<String>()
     val networkType: LiveData<String> = _networkType
 
-    private val _batteryTemp = MutableLiveData<Float>()
-    val batteryTemp: LiveData<Float> = _batteryTemp
-
-    private val _wifiSsid = MutableLiveData<String?>()
-    val wifiSsid: LiveData<String?> = _wifiSsid
-
-    private val _storageTotal = MutableLiveData<Long>()
-    val storageTotal: LiveData<Long> = _storageTotal
-
-    private val _storageUsed = MutableLiveData<Long>()
-    val storageUsed: LiveData<Long> = _storageUsed
-
-    private val _ramTotal = MutableLiveData<Long>()
-    val ramTotal: LiveData<Long> = _ramTotal
-
-    private val _ramUsed = MutableLiveData<Long>()
-    val ramUsed: LiveData<Long> = _ramUsed
-
-    private val _hardwareCpu = MutableLiveData<String>()
-    val hardwareCpu: LiveData<String> = _hardwareCpu
-
-    private val _cpuAbis = MutableLiveData<String>()
-    val cpuAbis: LiveData<String> = _cpuAbis
-
-    private val _manufacturer = MutableLiveData<String>()
-    val manufacturer: LiveData<String> = _manufacturer
-
-    private val _brand = MutableLiveData<String>()
-    val brand: LiveData<String> = _brand
-
-    private val _displayResolution = MutableLiveData<String>()
-    val displayResolution: LiveData<String> = _displayResolution
-
     // Recent commands
     private val _recentCommands = MutableLiveData<List<PendingCommand>>()
     val recentCommands: LiveData<List<PendingCommand>> = _recentCommands
@@ -93,7 +60,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadDeviceInfo()
         observeConnectionState()
         observeRecentCommands()
-        refreshTelemetry()
     }
 
     private fun loadDeviceInfo() {
@@ -101,11 +67,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _deviceModel.value = android.os.Build.MODEL
         _androidVersion.value = "Android ${android.os.Build.VERSION.RELEASE}"
         _lastSyncTime.value = app.preferences.lastSyncTime
-        _hardwareCpu.value = android.os.Build.HARDWARE
-        _cpuAbis.value = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
-        _manufacturer.value = android.os.Build.MANUFACTURER
-        _brand.value = android.os.Build.BRAND
-        _displayResolution.value = "1080x2400" // default, updated in telemetry
     }
 
     private fun observeConnectionState() {
@@ -137,15 +98,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _batteryLevel.value = telemetry.battery
                 _isCharging.value = telemetry.charging
                 _networkType.value = telemetry.networkType
-                _batteryTemp.value = telemetry.batteryTemp
-                _wifiSsid.value = telemetry.wifiSsid
-                _storageTotal.value = telemetry.storageTotal
-                _storageUsed.value = telemetry.storageUsed
-                _ramTotal.value = telemetry.ramTotal
-                _ramUsed.value = telemetry.ramUsed
-                val width = telemetry.display?.resolutionWidth ?: 1080
-                val height = telemetry.display?.resolutionHeight ?: 2400
-                _displayResolution.value = "${width}x${height}"
             } catch (e: Exception) {
                 // Handle error
             } finally {
@@ -169,15 +121,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _batteryLevel.value = telemetry.battery
                 _isCharging.value = telemetry.charging
                 _networkType.value = telemetry.networkType
-                _batteryTemp.value = telemetry.batteryTemp
-                _wifiSsid.value = telemetry.wifiSsid
-                _storageTotal.value = telemetry.storageTotal
-                _storageUsed.value = telemetry.storageUsed
-                _ramTotal.value = telemetry.ramTotal
-                _ramUsed.value = telemetry.ramUsed
-                val width = telemetry.display?.resolutionWidth ?: 1080
-                val height = telemetry.display?.resolutionHeight ?: 2400
-                _displayResolution.value = "${width}x${height}"
             } catch (e: Exception) {
                 // Handle error
             } finally {

@@ -62,7 +62,6 @@ class WebSocketClient(
 
     private var currentServerUrl: String = ""
     private var currentDeviceToken: String = ""
-    private var currentDeviceId: String = ""
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -93,7 +92,7 @@ class WebSocketClient(
     /**
      * Connect to the WebSocket server.
      */
-    fun connect(serverUrl: String, deviceToken: String, deviceId: String) {
+    fun connect(serverUrl: String, deviceToken: String) {
         if (deviceToken.isBlank()) {
             Log.w(TAG, "Cannot connect: device token is blank")
             return
@@ -101,7 +100,6 @@ class WebSocketClient(
 
         currentServerUrl = serverUrl
         currentDeviceToken = deviceToken
-        currentDeviceId = deviceId
 
         if (_connectionState.value == ConnectionState.CONNECTED ||
             _connectionState.value == ConnectionState.CONNECTING
@@ -113,7 +111,7 @@ class WebSocketClient(
         _connectionState.value = ConnectionState.CONNECTING
         registerNetworkCallback()
 
-        val wsUrl = Extensions.toWebSocketUrl(serverUrl, deviceId)
+        val wsUrl = Extensions.toWebSocketUrl(serverUrl, deviceToken)
         Log.d(TAG, "Connecting to: $wsUrl")
 
         val request = Request.Builder()
@@ -321,7 +319,7 @@ class WebSocketClient(
                 if (_connectionState.value == ConnectionState.CONNECTED) break
                 Log.d(TAG, "Reconnect attempt $attempt (delay=${delayMs}ms)...")
                 webSocket = null
-                connect(currentServerUrl, currentDeviceToken, currentDeviceId)
+                connect(currentServerUrl, currentDeviceToken)
                 // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, cap at 60s
                 delayMs = (delayMs * 2).coerceAtMost(MAX_RECONNECT_DELAY_MS)
             }
@@ -340,7 +338,7 @@ class WebSocketClient(
         reconnectAttempts.set(0)
         scope.launch {
             webSocket = null
-            connect(currentServerUrl, currentDeviceToken, currentDeviceId)
+            connect(currentServerUrl, currentDeviceToken)
         }
     }
 

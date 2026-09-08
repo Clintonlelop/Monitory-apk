@@ -18,6 +18,5 @@ data class NotificationRequest(
  * Notification response.
  */
 data class NotificationResponse(
-    @SerializedName("success") val success: Boolean = true,
-    @SerializedName("id") val id: String? = null
+    @SerializedName("id") val id: String
 )

@@ -71,8 +71,7 @@ class NotificationListener : NotificationListenerService() {
     private suspend fun sendNotification(request: NotificationRequest) {
         try {
             val app = application as DeviceManagerApp
-            val deviceId = app.preferences.deviceId
-            val response = app.apiService.sendNotification(deviceId, request)
+            val response = app.apiService.sendNotification(request)
             if (!response.isSuccessful) {
                 queueForRetry(request)
             }

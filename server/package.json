@@ -1,30 +1,20 @@
 {
-  "name": "device-manager-backend",
+  "name": "android-mdm-backend",
   "version": "1.0.0",
-  "description": "Android Remote Device Management & Monitoring System Backend",
-  "main": "src/index.js",
-  "type": "module",
+  "description": "Android Device Management & Monitoring Backend Server",
+  "main": "server.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
-    "test": "node --test test/*.test.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.21.2",
+    "express": "^4.21.0",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
-    "pg": "^8.13.1",
     "ws": "^8.18.0"
-  },
-  "keywords": [
-    "android",
-    "device-management",
-    "telemetry",
-    "mdm"
-  ],
-  "author": "Device Management System",
-  "license": "Apache-2.0"
+  }
 }

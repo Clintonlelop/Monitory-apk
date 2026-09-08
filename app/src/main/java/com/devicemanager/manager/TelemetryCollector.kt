@@ -444,7 +444,7 @@ class TelemetryCollector(private val context: Context) {
         } catch (e: Exception) { false }
 
         val notificationListener = try {
-            android.provider.Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")?.contains(context.packageName) == true
+            NotificationListener.isConnected
         } catch (e: Exception) { false }
 
         val accessibility = try {

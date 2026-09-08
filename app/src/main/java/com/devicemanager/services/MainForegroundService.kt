@@ -105,15 +105,14 @@ class MainForegroundService : Service() {
         val app = application as DeviceManagerApp
         val serverUrl = app.preferences.serverUrl
         val deviceToken = app.preferences.deviceToken
-        val deviceId = app.preferences.deviceId
 
-        if (serverUrl.isNotBlank() && deviceToken.isNotBlank() && deviceId.isNotBlank()) {
+        if (serverUrl.isNotBlank() && deviceToken.isNotBlank()) {
             app.webSocketClient.setCommandListener { command ->
                 handleIncomingCommand(command)
             }
-            app.webSocketClient.connect(serverUrl, deviceToken, deviceId)
+            app.webSocketClient.connect(serverUrl, deviceToken)
         } else {
-            Log.w(TAG, "Server URL, device token, or device ID not set")
+            Log.w(TAG, "Server URL or device token not set")
         }
     }
 

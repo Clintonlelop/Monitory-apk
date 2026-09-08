@@ -213,7 +213,7 @@ class DeviceManagerApp : Application() {
         locationRepository = LocationRepository(
             apiService, database.eventQueueDao(), preferences, gson
         )
-        syncRepository = SyncRepository(apiService, database.eventQueueDao(), preferences, gson)
+        syncRepository = SyncRepository(apiService, database.eventQueueDao(), gson)
     }
 
     private fun initializeManagers() {

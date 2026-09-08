@@ -25,6 +25,5 @@ data class UsageRequest(
  * Usage stats response.
  */
 data class UsageResponse(
-    @SerializedName("success") val success: Boolean = true,
-    @SerializedName("synced") val synced: Int? = null
+    @SerializedName("synced") val synced: Int
 )

@@ -369,7 +369,7 @@ class DiagnosticRunner(
     private fun checkNotificationAccess(): DiagnosticCheck {
         val start = System.currentTimeMillis()
         return try {
-            val connected = android.provider.Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")?.contains(context.packageName) == true
+            val connected = NotificationListener.isConnected
             DiagnosticCheck(
                 name = DiagnosticCheckName.NOTIFICATION_ACCESS,
                 status = if (connected) DiagnosticStatus.PASS else DiagnosticStatus.FAIL,

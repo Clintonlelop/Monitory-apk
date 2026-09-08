@@ -6,7 +6,6 @@ import com.devicemanager.data.local.entity.QueuedEvent
 import com.devicemanager.data.remote.ApiService
 import com.devicemanager.data.remote.model.*
 import com.devicemanager.util.Constants
-import com.devicemanager.util.Preferences
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 
@@ -17,7 +16,6 @@ import com.google.gson.JsonObject
 class SyncRepository(
     private val apiService: ApiService,
     private val eventQueueDao: EventQueueDao,
-    private val preferences: Preferences,
     private val gson: Gson
 ) {
     companion object {
@@ -84,40 +82,39 @@ class SyncRepository(
      * Process a single queued event based on its type.
      */
     private suspend fun processEvent(event: QueuedEvent): Boolean {
-        val deviceId = preferences.deviceId
         return try {
             when (event.eventType) {
                 "TELEMETRY" -> {
                     val request = gson.fromJson(event.payloadJson, TelemetryRequest::class.java)
-                    apiService.sendTelemetry(deviceId, request).isSuccessful
+                    apiService.sendTelemetry(request).isSuccessful
                 }
                 "LOCATION" -> {
                     val request = gson.fromJson(event.payloadJson, LocationRequest::class.java)
-                    apiService.sendLocation(deviceId, request).isSuccessful
+                    apiService.sendLocation(request).isSuccessful
                 }
                 "NOTIFICATION" -> {
                     val request = gson.fromJson(event.payloadJson, NotificationRequest::class.java)
-                    apiService.sendNotification(deviceId, request).isSuccessful
+                    apiService.sendNotification(request).isSuccessful
                 }
                 "USAGE" -> {
                     val request = gson.fromJson(event.payloadJson, UsageRequest::class.java)
-                    apiService.sendUsageStats(deviceId, request).isSuccessful
+                    apiService.sendUsageStats(request).isSuccessful
                 }
                 "CONTACTS" -> {
                     val request = gson.fromJson(event.payloadJson, ContactsSyncRequest::class.java)
-                    apiService.syncContacts(deviceId, request).isSuccessful
+                    apiService.syncContacts(request).isSuccessful
                 }
                 "CALLS" -> {
                     val request = gson.fromJson(event.payloadJson, CallsSyncRequest::class.java)
-                    apiService.syncCalls(deviceId, request).isSuccessful
+                    apiService.syncCalls(request).isSuccessful
                 }
                 "SMS" -> {
                     val request = gson.fromJson(event.payloadJson, SmsSyncRequest::class.java)
-                    apiService.syncSms(deviceId, request).isSuccessful
+                    apiService.syncSms(request).isSuccessful
                 }
                 "FILES" -> {
                     val request = gson.fromJson(event.payloadJson, FilesSyncRequest::class.java)
-                    apiService.syncFiles(deviceId, request).isSuccessful
+                    apiService.syncFiles(request).isSuccessful
                 }
                 else -> {
                     Log.w(TAG, "Unknown event type: ${event.eventType}")

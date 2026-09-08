@@ -27,19 +27,16 @@ data class FilesSyncRequest(
  * Files sync response.
  */
 data class FilesSyncResponse(
-    @SerializedName("success") val success: Boolean = true,
-    @SerializedName("synced") val synced: Int? = null
+    @SerializedName("synced") val synced: Int
 )
 
 /**
  * File upload response (multipart POST /api/upload).
  */
 data class FileUploadResponse(
-    @SerializedName("success") val success: Boolean = true,
-    @SerializedName("webPath") val webPath: String? = null,
-    @SerializedName("id") val id: String? = null,
-    @SerializedName("filename") val filename: String? = null,
-    @SerializedName("file_type") val fileType: String? = null,
-    @SerializedName("size_bytes") val sizeBytes: Long? = null,
-    @SerializedName("url") val url: String? = null
+    @SerializedName("id") val id: String,
+    @SerializedName("filename") val filename: String,
+    @SerializedName("file_type") val fileType: String,
+    @SerializedName("size_bytes") val sizeBytes: Long,
+    @SerializedName("url") val url: String?
 )

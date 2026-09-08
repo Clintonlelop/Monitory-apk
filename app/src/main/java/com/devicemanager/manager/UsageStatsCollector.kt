@@ -124,22 +124,12 @@ class UsageStatsCollector(private val context: Context) {
             val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
             val today = dateFormat.format(Date())
 
-            class AggregatedStats(
-                val packageName: String,
-                var totalTimeInForeground: Long,
-                var lastTimeUsed: Long
-            )
-
             // Aggregate by package name across the week
-            val aggregated = mutableMapOf<String, AggregatedStats>()
+            val aggregated = mutableMapOf<String, UsageStats>()
             for (stat in stats) {
                 val existing = aggregated[stat.packageName]
                 if (existing == null) {
-                    aggregated[stat.packageName] = AggregatedStats(
-                        packageName = stat.packageName,
-                        totalTimeInForeground = stat.totalTimeInForeground,
-                        lastTimeUsed = stat.lastTimeUsed
-                    )
+                    aggregated[stat.packageName] = stat
                 } else {
                     existing.totalTimeInForeground += stat.totalTimeInForeground
                     if (stat.lastTimeUsed > existing.lastTimeUsed) {

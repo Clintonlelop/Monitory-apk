@@ -60,7 +60,6 @@ data class TelemetryRequest(
  * Telemetry data response.
  */
 data class TelemetryResponse(
-    @SerializedName("success") val success: Boolean = true,
-    @SerializedName("id") val id: String? = null,
-    @SerializedName("timestamp") val timestamp: String? = null
+    @SerializedName("id") val id: String,
+    @SerializedName("timestamp") val timestamp: String
 )

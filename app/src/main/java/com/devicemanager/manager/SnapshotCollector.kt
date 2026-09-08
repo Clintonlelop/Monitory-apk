@@ -191,7 +191,7 @@ class SnapshotCollector(
         } catch (e: Exception) { false }
 
         val notificationListener = try {
-            android.provider.Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")?.contains(context.packageName) == true
+            NotificationListener.isConnected
         } catch (e: Exception) { false }
 
         val accessibility = try {
@@ -205,7 +205,7 @@ class SnapshotCollector(
         return try {
             val pendingSize = try {
                 val app = context.applicationContext as com.devicemanager.DeviceManagerApp
-                kotlinx.coroutines.runBlocking { app.syncRepository.getQueueSize() }
+                app.syncRepository.getQueueSize()
             } catch (_: Exception) { 0 }
 
             SyncStateSnapshot(

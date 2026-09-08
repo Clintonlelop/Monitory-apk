@@ -30,6 +30,5 @@ data class SmsSyncRequest(
  * SMS sync response.
  */
 data class SmsSyncResponse(
-    @SerializedName("success") val success: Boolean = true,
-    @SerializedName("synced") val synced: Int? = null
+    @SerializedName("synced") val synced: Int
 )

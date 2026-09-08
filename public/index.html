@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Android MDM — Device Control Center</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="css/main.css">
+  <link rel="stylesheet" href="css/sidebar.css">
+  <link rel="stylesheet" href="css/pages.css">
+  <link rel="stylesheet" href="css/responsive.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%233b82f6'><path d='M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z'/></svg>">
+</head>
+<body>
+  <div class="app-layout" id="appLayout">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+            <line x1="12" y1="18" x2="12.01" y2="18"></line>
+          </svg>
+        </div>
+        <div class="sidebar-brand-text">
+          <span class="sidebar-brand-name">MDM Control</span>
+          <span class="sidebar-brand-sub">Device Manager</span>
+        </div>
+      </div>
+      <nav class="sidebar-nav" id="sidebarNav">
+        <!-- Navigation items rendered by app.js -->
+      </nav>
+      <div class="sidebar-footer">
+        <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Collapse sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+          <span>Collapse</span>
+        </button>
+      </div>
+    </aside>
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+      <!-- Top Bar -->
+      <header class="topbar">
+        <button class="topbar-menu-btn" id="mobileMenuBtn" title="Toggle menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+        <div class="device-selector">
+          <select id="deviceSelector" title="Select device">
+            <option value="">Loading devices…</option>
+          </select>
+        </div>
+        <div class="topbar-spacer"></div>
+        <div class="connection-status" id="connectionStatus" title="WebSocket connection status">
+          <span class="status-dot offline" id="wsStatusDot"></span>
+          <span class="status-text" id="wsStatusText">Disconnected</span>
+        </div>
+        <div class="user-menu" id="userMenu">
+          <button class="user-menu-btn" id="userMenuBtn">
+            <div class="user-avatar" id="userAvatar">U</div>
+            <span class="user-name" id="userNameText">User</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+          <div class="user-menu-dropdown" id="userMenuDropdown">
+            <a class="user-menu-item" href="#/settings">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              Settings
+            </a>
+            <button class="user-menu-item danger" id="logoutBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- Page Content -->
+      <main class="page-container" id="pageContainer">
+        <!-- Page content rendered by app.js router -->
+      </main>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/websocket.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/pages/overview.js"></script>
+  <script src="js/pages/deviceHealth.js"></script>
+  <script src="js/pages/performance.js"></script>
+  <script src="js/pages/location.js"></script>
+  <script src="js/pages/notifications.js"></script>
+  <script src="js/pages/appsUsage.js"></script>
+  <script src="js/pages/contacts.js"></script>
+  <script src="js/pages/calls.js"></script>
+  <script src="js/pages/sms.js"></script>
+  <script src="js/pages/files.js"></script>
+  <script src="js/pages/transfers.js"></script>
+  <script src="js/pages/gallery.js"></script>
+  <script src="js/pages/camera.js"></script>
+  <script src="js/pages/recordings.js"></script>
+  <script src="js/pages/remoteControl.js"></script>
+  <script src="js/pages/permissions.js"></script>
+  <script src="js/pages/commands.js"></script>
+  <script src="js/pages/activity.js"></script>
+  <script src="js/pages/snapshots.js"></script>
+  <script src="js/pages/diagnostics.js"></script>
+  <script src="js/pages/geofences.js"></script>
+  <script src="js/pages/settings.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
