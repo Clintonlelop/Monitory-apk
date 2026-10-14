@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Warning
@@ -347,6 +348,19 @@ fun DashboardScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Privacy Status")
                 }
+            }
+        }
+
+        // Local storage browser (user-selected folders only)
+        item {
+            OutlinedButton(
+                onClick = { viewModel.navigateTo(Screen.StorageBrowser) },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Browse Storage & File Details")
             }
         }
 
