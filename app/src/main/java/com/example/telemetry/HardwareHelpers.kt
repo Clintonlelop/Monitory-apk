@@ -2,10 +2,10 @@ package com.example.telemetry
 
 import android.Manifest
 import android.app.AppOpsManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Process
@@ -13,7 +13,6 @@ import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.example.data.model.DevicePermissionsStatus
-import java.io.File
 
 class PermissionsHelper(private val context: Context) {
 
@@ -25,6 +24,7 @@ class PermissionsHelper(private val context: Context) {
             camera = isCameraGranted(),
             microphone = isAudioGranted(),
             usageAccess = isUsageAccessGranted(),
+            // Screen capture is a user-approved session, not a persistent permission.
             screenSharing = false,
             contacts = isContactsGranted(),
             calls = isCallsGranted(),
@@ -34,160 +34,110 @@ class PermissionsHelper(private val context: Context) {
     }
 
     fun isAccessibilityEnabled(): Boolean {
-        try {
+        return try {
             val enabledServices = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            ) ?: ""
-            val expectedService = "${context.packageName}/com.example.service.DeviceAccessibilityService"
-            return enabledServices.contains(expectedService) || enabledServices.contains(context.packageName)
-        } catch (e: Exception) {
-            return false
+            ).orEmpty()
+            val expectedService = ComponentName(
+                context,
+                com.example.service.DeviceAccessibilityService::class.java
+            ).flattenToString()
+            enabledServices.split(':').any { it.equals(expectedService, ignoreCase = true) }
+        } catch (_: Exception) {
+            false
         }
     }
 
-    fun isContactsGranted(): Boolean {
-        return ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
-    }
+    fun isContactsGranted(): Boolean = hasPermission(Manifest.permission.READ_CONTACTS)
 
-    fun isCallsGranted(): Boolean {
-        return ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
-    }
+    fun isCallsGranted(): Boolean = hasPermission(Manifest.permission.READ_CALL_LOG)
 
-    fun isSmsGranted(): Boolean {
-        return ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
-    }
+    fun isSmsGranted(): Boolean = hasPermission(Manifest.permission.READ_SMS)
 
     fun isLocationGranted(): Boolean {
-        val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val coarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val fine = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+        val coarse = hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
         return fine || coarse
     }
 
     fun isNotificationAccessGranted(): Boolean {
-        val packages = NotificationManagerCompat.getEnabledListenerPackages(context)
-        return packages.contains(context.packageName)
-    }
-
-    fun isStorageGranted(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            android.os.Environment.isExternalStorageManager()
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
-        } else {
-            @Suppress("DEPRECATION")
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        return try {
+            NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+        } catch (_: Exception) {
+            false
         }
     }
 
-    fun isCameraGranted(): Boolean {
-        return ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    /**
+     * Reports the storage access this app can actually use on this OS version.
+     * Android 11+ full-file access is a special app access toggle; Android 13+
+     * media permissions alone do not grant arbitrary file-system access.
+     */
+    fun isStorageGranted(): Boolean {
+        return when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
+                android.os.Environment.isExternalStorageManager()
+            else -> hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
     }
 
-    fun isAudioGranted(): Boolean {
-        return ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    }
+    fun isCameraGranted(): Boolean = hasPermission(Manifest.permission.CAMERA)
+
+    fun isAudioGranted(): Boolean = hasPermission(Manifest.permission.RECORD_AUDIO)
 
     fun isUsageAccessGranted(): Boolean {
         val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return false
-        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            appOps.unsafeCheckOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                Process.myUid(),
-                context.packageName
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            appOps.checkOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS,
-                Process.myUid(),
-                context.packageName
-            )
+        val mode = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                appOps.unsafeCheckOpNoThrow(
+                    AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    Process.myUid(),
+                    context.packageName
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                appOps.checkOpNoThrow(
+                    AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    Process.myUid(),
+                    context.packageName
+                )
+            }
+        } catch (_: Exception) {
+            return false
         }
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
+    private fun hasPermission(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
     fun openAppSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
             data = Uri.fromParts("package", context.packageName, null)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
     }
 
     fun openNotificationAccessSettings() {
         val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
     }
 
     fun openUsageAccessSettings() {
         val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
     }
 
     fun openAccessibilitySettings() {
         val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
-    }
-}
-
-class AudioRecorderHelper(private val context: Context) {
-    private var recorder: MediaRecorder? = null
-    private var currentOutputFile: File? = null
-    private var startTimeMillis: Long = 0L
-
-    var isRecording: Boolean = false
-        private set
-
-    fun startRecording(): File? {
-        if (isRecording) return currentOutputFile
-
-        val file = File(context.cacheDir, "record_${System.currentTimeMillis()}.m4a")
-        currentOutputFile = file
-        startTimeMillis = System.currentTimeMillis()
-
-        try {
-            recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(context)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
-            }.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioEncodingBitRate(128000)
-                setAudioSamplingRate(44100)
-                setOutputFile(file.absolutePath)
-                prepare()
-                start()
-            }
-            isRecording = true
-            return file
-        } catch (e: Exception) {
-            recorder?.release()
-            recorder = null
-            isRecording = false
-            return null
-        }
-    }
-
-    fun stopRecording(): Pair<File?, Long> {
-        if (!isRecording) return Pair(null, 0L)
-        val duration = System.currentTimeMillis() - startTimeMillis
-        try {
-            recorder?.stop()
-        } catch (_: Exception) {}
-        recorder?.release()
-        recorder = null
-        isRecording = false
-        return Pair(currentOutputFile, duration)
     }
 }
