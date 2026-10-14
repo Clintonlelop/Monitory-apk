@@ -77,7 +77,8 @@ class PermissionsHelper(private val context: Context) {
     fun isStorageGranted(): Boolean {
         return when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
-                android.os.Environment.isExternalStorageManager()
+                android.os.Environment.isExternalStorageManager() ||
+                    context.contentResolver.persistedUriPermissions.any { it.isReadPermission }
             else -> hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
     }
