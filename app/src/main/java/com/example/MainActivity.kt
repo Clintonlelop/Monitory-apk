@@ -129,6 +129,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Settings-based grants (notification, usage, accessibility, storage) can change
+        // while this Activity is paused. Refresh when the user returns from Settings.
+        viewModel.refreshPermissions()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
