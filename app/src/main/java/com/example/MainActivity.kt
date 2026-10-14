@@ -27,6 +27,7 @@ import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.PrivacyPermissionsScreen
 import com.example.ui.screens.SetupWizardScreen
+import com.example.ui.screens.StorageBrowserScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
@@ -125,6 +126,7 @@ class MainActivity : ComponentActivity() {
                             )
                             is Screen.Dashboard -> DashboardScreen(viewModel = viewModel)
                             is Screen.Privacy -> PrivacyPermissionsScreen(viewModel = viewModel)
+                            is Screen.StorageBrowser -> StorageBrowserScreen(viewModel = viewModel)
                         }
                     }
                 }
