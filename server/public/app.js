@@ -173,7 +173,10 @@ function initDashboard() {
 }
 
 // Navigation
-function setupNavigation() {
+function setupNavigation() {\n  const storageRefresh = document.getElementById('btn-refresh-storage');
+  if (storageRefresh) storageRefresh.addEventListener('click', () => renderStorageOverview(currentDevice));
+
+
   const navItems = document.querySelectorAll('.nav-item');
   navItems.forEach(item => {
     item.addEventListener('click', (e) => {
@@ -254,7 +257,7 @@ function showView(viewName) {
     viewName === 'device-detail' ? 'Device Details' :
     viewName.charAt(0).toUpperCase() + viewName.slice(1);
 
-  if (viewName === 'devices') loadDevices();
+  if (viewName === 'devices') loadDevices();\n  if (viewName === 'device-detail' || viewName === 'files') renderStorageOverview(currentDevice);
   if (viewName === 'audit') loadAuditLogs();
   if (viewName === 'alerts') loadAlerts();
 }
@@ -1832,7 +1835,37 @@ async function loadDeviceKeystrokes(deviceId) {
   } catch (_) {}
 }
 
-// Files Explorer loader
+
+// Storage overview: display only the paired device's reported capacity.
+function renderStorageOverview(device = currentDevice) {
+  const totalEl = document.getElementById('storage-total');
+  const usedEl = document.getElementById('storage-used');
+  const freeEl = document.getElementById('storage-free');
+  const bar = document.getElementById('storage-usage-bar');
+  const note = document.getElementById('storage-status-note');
+  if (!totalEl || !usedEl || !freeEl || !bar || !note) return;
+
+  const total = Number(device?.storage_total ?? device?.storageTotalBytes ?? device?.storageTotal ?? 0);
+  const free = Number(device?.storage_available ?? device?.storageAvailableBytes ?? device?.storageAvailable ?? 0);
+  if (!Number.isFinite(total) || !Number.isFinite(free) || total <= 0 || free < 0) {
+    totalEl.textContent = usedEl.textContent = freeEl.textContent = 'Not reported';
+    bar.style.width = '0%';
+    note.textContent = 'Storage telemetry is not available yet. Select a paired device and sync its status from the Android app.';
+    return;
+  }
+  const used = Math.max(0, total - free);
+  const fmt = (bytes) => {
+    if (bytes >= 1024 ** 3) return (bytes / (1024 ** 3)).toFixed(2) + ' GB';
+    if (bytes >= 1024 ** 2) return (bytes / (1024 ** 2)).toFixed(1) + ' MB';
+    return Math.round(bytes / 1024) + ' KB';
+  };
+  totalEl.textContent = fmt(total);
+  usedEl.textContent = fmt(used);
+  freeEl.textContent = fmt(free);
+  bar.style.width = Math.min(100, Math.max(0, used / total * 100)).toFixed(1) + '%';
+  note.textContent = 'Capacity reflects the latest telemetry received from this device; it is not a live per-file scan.';
+}
+\n// Files Explorer loader
 async function loadDeviceFiles(deviceId) {
   try {
     const res = await fetch(`/api/devices/${deviceId}/files`, {
