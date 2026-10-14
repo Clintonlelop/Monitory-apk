@@ -301,8 +301,10 @@ function handleWsMessage(msg) {
     loadDevices();
     pushConsoleTimeline('SYSTEM', 'Device Status Transition', `Device is now ${msg.status}`, msg.status === 'ONLINE' ? 'success' : 'error');
   } else if (msg.type === 'DEVICE_TELEMETRY_UPDATED') {
-    if (currentDevice && currentDevice.id === msg.deviceId) {
+    if (currentDevice && String(currentDevice.id) === String(msg.deviceId)) {
       applyTelemetry(msg.telemetry);
+      currentDevice = { ...currentDevice, ...(msg.telemetry || {}) };
+      renderStorageOverview(currentDevice);
     }
     loadDevices();
     const bLevel = msg.telemetry ? (msg.telemetry.battery_level !== undefined ? msg.telemetry.battery_level : msg.telemetry.batteryLevel) : 0;
