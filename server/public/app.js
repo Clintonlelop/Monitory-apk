@@ -174,7 +174,13 @@ function initDashboard() {
 
 // Navigation
 function setupNavigation() {\n  const storageRefresh = document.getElementById('btn-refresh-storage');
-  if (storageRefresh) storageRefresh.addEventListener('click', () => renderStorageOverview(currentDevice));
+  if (storageRefresh) storageRefresh.addEventListener('click', () => {
+    if (currentDevice?.id != null && typeof window.openDeviceDetail === 'function') {
+      window.openDeviceDetail(currentDevice.id);
+    } else {
+      renderStorageOverview(currentDevice);
+    }
+  });
 
 
   const navItems = document.querySelectorAll('.nav-item');
@@ -466,6 +472,7 @@ window.openDeviceDetail = async function(deviceId) {
     });
     if (!res.ok) return;
     currentDevice = await res.json();
+    renderStorageOverview(currentDevice);
 
     document.getElementById('detail-device-name').textContent = currentDevice.device_name || 'Android Device';
     document.getElementById('detail-device-sub').textContent =
