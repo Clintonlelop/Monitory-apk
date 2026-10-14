@@ -75,7 +75,7 @@ fun StorageBrowserScreen(viewModel: MainViewModel, modifier: Modifier = Modifier
         try {
             val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
                 tree,
-                DocumentsContract.getDocumentId(directory)
+                (if (DocumentsContract.isTreeUri(directory)) DocumentsContract.getTreeDocumentId(directory) else DocumentsContract.getDocumentId(directory))
             )
             val results = mutableListOf<StorageEntry>()
             context.contentResolver.query(
@@ -125,7 +125,7 @@ fun StorageBrowserScreen(viewModel: MainViewModel, modifier: Modifier = Modifier
             try {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             } catch (_: SecurityException) {
                 // Some document providers grant read-only access; keep the grant they supplied.
