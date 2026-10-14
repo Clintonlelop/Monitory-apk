@@ -75,7 +75,7 @@ fun StorageBrowserScreen(viewModel: MainViewModel, modifier: Modifier = Modifier
         try {
             val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
                 tree,
-                (if (DocumentsContract.isTreeUri(directory)) DocumentsContract.getTreeDocumentId(directory) else DocumentsContract.getDocumentId(directory))
+                (if (directory == tree) DocumentsContract.getTreeDocumentId(tree) else DocumentsContract.getDocumentId(directory))
             )
             val results = mutableListOf<StorageEntry>()
             context.contentResolver.query(
