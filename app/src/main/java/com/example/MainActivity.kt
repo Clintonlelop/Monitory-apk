@@ -74,23 +74,8 @@ class MainActivity : ComponentActivity() {
                     permissionLauncher.launch(requested.toTypedArray())
                 }
 
-                fun openStorageAccessSettings() {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        val intent = Intent(
-                            android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION
-                        ).apply {
-                            data = android.net.Uri.parse("package:$packageName")
-                        }
-                        try {
-                            startActivity(intent)
-                        } catch (_: android.content.ActivityNotFoundException) {
-                            startActivity(
-                                Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                            )
-                        }
-                    } else {
-                        launchPermissionsRequest()
-                    }
+                fun openStorageBrowser() {
+                    viewModel.navigateTo(Screen.StorageBrowser)
                 }
 
                 LaunchedEffect(uiState) {
@@ -122,7 +107,7 @@ class MainActivity : ComponentActivity() {
                             is Screen.SetupWizard -> SetupWizardScreen(
                                 viewModel = viewModel,
                                 onRequestPermissions = { launchPermissionsRequest() },
-                                onRequestStorageAccess = { openStorageAccessSettings() }
+                                onRequestStorageAccess = { openStorageBrowser() }
                             )
                             is Screen.Dashboard -> DashboardScreen(viewModel = viewModel)
                             is Screen.Privacy -> PrivacyPermissionsScreen(viewModel = viewModel)
