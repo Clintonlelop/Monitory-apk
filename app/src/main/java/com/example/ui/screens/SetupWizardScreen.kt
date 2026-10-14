@@ -77,6 +77,7 @@ import com.example.ui.viewmodel.MainViewModel
 fun SetupWizardScreen(
     viewModel: MainViewModel,
     onRequestPermissions: () -> Unit,
+    onRequestStorageAccess: () -> Unit = onRequestPermissions,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -201,7 +202,7 @@ fun SetupWizardScreen(
                         )
                         5 -> StepFilesAndMedia(
                             isGranted = permissions.filesAccess,
-                            onRequest = onRequestPermissions
+                            onRequest = onRequestStorageAccess
                         )
                         6 -> StepUsageAccess(
                             isGranted = permissions.usageAccess,
