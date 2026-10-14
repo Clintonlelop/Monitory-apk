@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.os.SystemClock
-import com.example.BuildConfig
 import com.example.data.model.DeviceTelemetry
 import com.example.data.prefs.PreferenceManager
 
@@ -34,7 +33,7 @@ class TelemetryCollector(
             model = Build.MODEL,
             osVersion = Build.VERSION.RELEASE,
             sdkVersion = Build.VERSION.SDK_INT,
-            appVersion = BuildConfig.VERSION_NAME,
+            appVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty(),
             batteryLevel = batteryLevel,
             isCharging = isCharging,
             storageAvailableBytes = storageAvail,
