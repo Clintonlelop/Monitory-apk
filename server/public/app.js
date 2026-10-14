@@ -1,6 +1,6 @@
 // Web Admin Dashboard Client Logic
 
-let authToken = localStorage.getItem('token') || null;
+let authToken = localStorage.getItem('token') || localStorage.getItem('mdm_jwt_token') || null;
 let currentDevice = null;
 let ws = null;
 let mapInstance = null;
@@ -20,7 +20,7 @@ const btnRegenCode = document.getElementById('btn-regen-code');
 const logoutBtn = document.getElementById('logout-btn');
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   setupNavigation();
   setupAuth();
   setupPairingModal();
@@ -28,22 +28,63 @@ document.addEventListener('DOMContentLoaded', () => {
   setupCommandButtons();
 
   if (authToken) {
-    authModal.classList.add('hidden');
-    initDashboard();
+    try {
+      const res = await fetch('/api/auth/me', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const user = data.user || {};
+        document.getElementById('user-display-name').textContent = user.username || user.email || 'Admin';
+        authModal.classList.add('hidden');
+        initDashboard();
+        return;
+      }
+    } catch (_) {}
+    // If token is invalid or expired
+    handleUnauthorized();
   } else {
     authModal.classList.remove('hidden');
   }
 });
+
+function handleUnauthorized() {
+  localStorage.removeItem('token');
+  localStorage.removeItem('mdm_jwt_token');
+  localStorage.removeItem('user');
+  localStorage.removeItem('mdm_user');
+  authToken = null;
+  authModal.classList.remove('hidden');
+  if (ws) {
+    try { ws.close(); } catch (_) {}
+  }
+}
 
 // Authentication
 function setupAuth() {
   let isRegisterMode = false;
   const toggleBtn = document.getElementById('toggle-auth-mode');
   const submitBtn = document.getElementById('btn-login-submit');
+  const errorMsg = document.getElementById('login-error-msg');
+
+  function showError(msg) {
+    if (errorMsg) {
+      errorMsg.textContent = msg;
+      errorMsg.style.display = 'block';
+    }
+  }
+
+  function hideError() {
+    if (errorMsg) {
+      errorMsg.textContent = '';
+      errorMsg.style.display = 'none';
+    }
+  }
 
   if (toggleBtn) {
     toggleBtn.addEventListener('click', (e) => {
       e.preventDefault();
+      hideError();
       isRegisterMode = !isRegisterMode;
       if (isRegisterMode) {
         submitBtn.textContent = 'Create Account & Sign In';
@@ -57,8 +98,18 @@ function setupAuth() {
 
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    hideError();
     const email = document.getElementById('login-email').value.trim();
     const password = document.getElementById('login-password').value;
+
+    if (!email || !password) {
+      showError('Please enter both email/username and password.');
+      return;
+    }
+
+    const prevBtnText = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.textContent = isRegisterMode ? 'Creating Account...' : 'Signing In...';
 
     const endpoint = isRegisterMode ? '/api/auth/register' : '/api/auth/login';
 
@@ -73,8 +124,8 @@ function setupAuth() {
         })
       });
 
-      // If login failed because user doesn't exist yet, automatically try registering
-      if (!res.ok && !isRegisterMode && res.status === 401) {
+      // If login failed because user doesn't exist yet, auto-register
+      if (!res.ok && !isRegisterMode && (res.status === 401 || res.status === 404)) {
         const regRes = await fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -90,24 +141,26 @@ function setupAuth() {
       }
 
       const data = await res.json();
-      if (res.ok) {
+      if (res.ok && data.token) {
         authToken = data.token;
         localStorage.setItem('token', authToken);
-        document.getElementById('user-display-name').textContent = data.user.username || data.user.email;
+        const displayName = (data.user && (data.user.username || data.user.email)) || email;
+        document.getElementById('user-display-name').textContent = displayName;
         authModal.classList.add('hidden');
         initDashboard();
       } else {
-        alert(data.error || 'Authentication failed');
+        showError(data.error || 'Authentication failed. Please verify your credentials.');
       }
     } catch (err) {
-      alert('Error connecting to backend: ' + err.message);
+      showError('Network error connecting to backend: ' + err.message);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = prevBtnText;
     }
   });
 
   logoutBtn.addEventListener('click', () => {
-    localStorage.removeItem('token');
-    authToken = null;
-    if (ws) ws.close();
+    handleUnauthorized();
     location.reload();
   });
 }
@@ -130,21 +183,17 @@ function setupNavigation() {
     });
   });
 
-  document.getElementById('btn-back-to-devices').addEventListener('click', () => {
-    showView('devices');
-  });
+  const btnBack = document.getElementById('btn-back-to-devices');
+  if (btnBack) btnBack.addEventListener('click', () => showView('devices'));
 
-  document.getElementById('device-search-input').addEventListener('input', (e) => {
-    filterDevices(e.target.value);
-  });
+  const devSearch = document.getElementById('device-search-input');
+  if (devSearch) devSearch.addEventListener('input', (e) => filterDevices(e.target.value));
 
-  document.getElementById('sms-search-input').addEventListener('input', (e) => {
-    filterSMS(e.target.value);
-  });
+  const smsSearch = document.getElementById('sms-search-input');
+  if (smsSearch) smsSearch.addEventListener('input', (e) => filterSMS(e.target.value));
 
-  document.getElementById('contacts-search-input').addEventListener('input', (e) => {
-    filterContacts(e.target.value);
-  });
+  const contactsSearch = document.getElementById('contacts-search-input');
+  if (contactsSearch) contactsSearch.addEventListener('input', (e) => filterContacts(e.target.value));
 
   // Swipe Gesture Navigation for Mobile Main Views
   const mainContent = document.querySelector('.main-content');
@@ -297,6 +346,11 @@ function handleWsMessage(msg) {
       loadDeviceFiles(currentDevice.id);
     }
     pushConsoleTimeline('SYSTEM', 'Storage Manifest Received', `Rebuilt local file explorer cache`, 'success');
+  } else if (msg.type === 'DEVICE_CALLS_RECEIVED') {
+    if (currentDevice && currentDevice.id === msg.deviceId) {
+      loadDeviceCalls(currentDevice.id);
+    }
+    pushConsoleTimeline('COMMUNICATION', 'Call Logs Synced', `Received updated call history records`, 'info');
   } else if (msg.type === 'DEVICE_PAIRED') {
     loadDevices();
     showView('devices');
@@ -312,6 +366,10 @@ async function loadDevices() {
     const res = await fetch('/api/devices', {
       headers: { 'Authorization': `Bearer ${authToken}` }
     });
+    if (res.status === 401) {
+      handleUnauthorized();
+      return;
+    }
     if (!res.ok) return;
     allDevices = await res.json();
 
@@ -1240,31 +1298,40 @@ async function loadDeviceUsage(deviceId) {
 
 // Command Center
 function setupCommandButtons() {
-  document.querySelectorAll('.cmd-tile').forEach(btn => {
+  document.querySelectorAll('.cmd-tile, .cmd-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const cmdType = btn.getAttribute('data-cmd');
-      if (!currentDevice) return;
+      if (!cmdType) return;
+      if (!currentDevice) {
+        alert('Please open an active device from Fleet Devices first.');
+        return;
+      }
       await dispatchCommand(currentDevice.id, cmdType);
     });
   });
 
-  document.getElementById('btn-cmd-sync').addEventListener('click', () => {
+  const btnSync = document.getElementById('btn-cmd-sync');
+  if (btnSync) btnSync.addEventListener('click', () => {
     if (currentDevice) dispatchCommand(currentDevice.id, 'SYNC_DEVICE');
   });
 
-  document.getElementById('btn-cmd-location').addEventListener('click', () => {
+  const btnLoc = document.getElementById('btn-cmd-location');
+  if (btnLoc) btnLoc.addEventListener('click', () => {
     if (currentDevice) dispatchCommand(currentDevice.id, 'REQUEST_LOCATION');
   });
 
-  document.getElementById('btn-request-apps').addEventListener('click', () => {
+  const btnApps = document.getElementById('btn-request-apps');
+  if (btnApps) btnApps.addEventListener('click', () => {
     if (currentDevice) dispatchCommand(currentDevice.id, 'REQUEST_APPS');
   });
 
-  document.getElementById('btn-request-usage').addEventListener('click', () => {
+  const btnUsage = document.getElementById('btn-request-usage');
+  if (btnUsage) btnUsage.addEventListener('click', () => {
     if (currentDevice) dispatchCommand(currentDevice.id, 'REQUEST_USAGE');
   });
 
-  document.getElementById('btn-disconnect-device').addEventListener('click', async () => {
+  const btnDisc = document.getElementById('btn-disconnect-device');
+  if (btnDisc) btnDisc.addEventListener('click', async () => {
     if (!currentDevice) return;
     if (confirm(`Are you sure you want to disconnect ${currentDevice.device_name}?`)) {
       await fetch(`/api/devices/${currentDevice.id}/disconnect`, {
@@ -2024,6 +2091,10 @@ async function loadAuditLogs() {
     const res = await fetch('/api/audit', {
       headers: { 'Authorization': `Bearer ${authToken}` }
     });
+    if (res.status === 401) {
+      handleUnauthorized();
+      return;
+    }
     if (!res.ok) return;
     const logs = await res.json();
     const tbody = document.getElementById('audit-table-body');
@@ -2092,19 +2163,25 @@ async function loadAlerts() {
 
 // Pairing Modal Logic
 function setupPairingModal() {
-  btnPairModal.addEventListener('click', () => {
-    pairModal.classList.remove('hidden');
-    generatePairingCode();
-  });
+  if (btnPairModal) {
+    btnPairModal.addEventListener('click', () => {
+      if (pairModal) pairModal.classList.remove('hidden');
+      generatePairingCode();
+    });
+  }
 
-  btnClosePairModal.addEventListener('click', () => {
-    pairModal.classList.add('hidden');
-    clearInterval(pairingTimer);
-  });
+  if (btnClosePairModal) {
+    btnClosePairModal.addEventListener('click', () => {
+      if (pairModal) pairModal.classList.add('hidden');
+      clearInterval(pairingTimer);
+    });
+  }
 
-  btnRegenCode.addEventListener('click', () => {
-    generatePairingCode();
-  });
+  if (btnRegenCode) {
+    btnRegenCode.addEventListener('click', () => {
+      generatePairingCode();
+    });
+  }
 }
 
 async function generatePairingCode() {

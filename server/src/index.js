@@ -77,7 +77,7 @@ async function logAudit(userId, deviceId, action, details, ip) {
 // ==========================================
 // HEALTH & METRICS
 // ==========================================
-app.get('/health', (req, res) => {
+app.get(['/health', '/api/health'], (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
@@ -130,6 +130,7 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     const token = generateToken({ id: userId, username, email, role: 'admin' });
+    logAudit(userId, null, 'REGISTER', { email, username }, req.ip);
     res.json({ token, user: { id: userId, username, email, role: 'admin' } });
   } catch (err) {
     res.status(500).json({ error: err.message });

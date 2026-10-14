@@ -25,6 +25,7 @@ const Auth = (function () {
    */
   function setToken(token) {
     localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem('token', token);
   }
 
   /**
@@ -32,7 +33,7 @@ const Auth = (function () {
    */
   function getUser() {
     try {
-      return JSON.parse(localStorage.getItem(USER_KEY) || 'null');
+      return JSON.parse(localStorage.getItem(USER_KEY) || localStorage.getItem('user') || 'null');
     } catch {
       return null;
     }
@@ -43,6 +44,7 @@ const Auth = (function () {
    */
   function setUser(user) {
     localStorage.setItem(USER_KEY, JSON.stringify(user));
+    localStorage.setItem('user', JSON.stringify(user));
   }
 
   /**
