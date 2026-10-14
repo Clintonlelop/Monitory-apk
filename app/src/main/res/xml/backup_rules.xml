@@ -1,11 +1,13 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!--
-  Full backup content rules (pre-Android 12).
-  Excludes sensitive runtime data from backup.
+<?xml version="1.0" encoding="utf-8"?><!--
+   Sample backup rules file; uncomment and customize as necessary.
+   See https://developer.android.com/guide/topics/data/autobackup
+   for details.
+   Note: This file is ignored for devices older than API 31
+   See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <exclude domain="sharedpref" path="device_prefs.xml" />
-    <exclude domain="database" path="app_database" />
-    <exclude domain="database" path="app_database-wal" />
-    <exclude domain="database" path="app_database-shm" />
+    <!--
+   <include domain="sharedpref" path="."/>
+   <exclude domain="sharedpref" path="device.xml"/>
+-->
 </full-backup-content>

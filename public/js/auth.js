@@ -66,12 +66,12 @@ const Auth = (function () {
   /**
    * Login — calls /api/auth/login
    */
-  async function login(username, password) {
-    log('Logging in as', username);
+  async function login(identifier, password) {
+    log('Logging in as', identifier);
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ identifier, username: identifier, password })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -79,7 +79,7 @@ const Auth = (function () {
     }
     if (data.token) setToken(data.token);
     if (data.user) setUser(data.user);
-    else setUser({ username });
+    else setUser({ username: identifier });
     log('Login successful');
     return data;
   }
@@ -87,12 +87,12 @@ const Auth = (function () {
   /**
    * Register — calls /api/auth/register
    */
-  async function register(username, password) {
-    log('Registering user', username);
+  async function register(username, email, password) {
+    log('Registering user', username, email);
     const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, email, password })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {

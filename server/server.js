@@ -33,7 +33,8 @@ const snapshotRoutes = require('./src/routes/snapshots');
 const diagnosticRoutes = require('./src/routes/diagnostics');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
-const PORT = process.env.PORT || 3000;
+// In this container environment, nginx listens on 8080 and proxies to 3000.
+const PORT = 3000;
 
 // Initialize database
 initSchema();
@@ -90,7 +91,7 @@ app.use('/api/*', (req, res) => {
 });
 
 // Serve dashboard static files
-const dashboardDir = path.join(__dirname, '..', 'dashboard');
+const dashboardDir = path.join(__dirname, '..', 'public');
 app.use(express.static(dashboardDir));
 
 // SPA fallback - serve index.html for all non-API routes

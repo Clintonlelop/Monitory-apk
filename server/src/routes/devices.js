@@ -6,14 +6,21 @@ const wsManager = require('../ws/manager');
 
 const router = express.Router();
 
-// POST /api/devices/register - device pairing (dashboard auth)
-router.post('/register', auth, (req, res) => {
+// POST /api/devices/register - device registration and pairing
+router.post('/register', (req, res) => {
   try {
-    const { device_token, name, model, manufacturer, android_version, app_version, display } = req.body;
+    const rawToken = req.body.device_token || req.body.deviceToken;
+    const name = req.body.name;
+    const model = req.body.model;
+    const manufacturer = req.body.manufacturer;
+    const android_version = req.body.android_version || req.body.androidVersion;
+    const app_version = req.body.app_version || req.body.appVersion;
+    const display = req.body.display;
 
-    if (!device_token || typeof device_token !== 'string') {
+    if (!rawToken || typeof rawToken !== 'string') {
       return res.status(400).json({ error: 'device_token is required' });
     }
+    const device_token = rawToken.trim();
 
     // Parse display info
     const displayWidth = display?.resolution_width != null ? parseInt(display.resolution_width) : null;
@@ -38,6 +45,7 @@ router.post('/register', auth, (req, res) => {
           display_density = COALESCE(?, display_density),
           display_orientation = COALESCE(?, display_orientation),
           display_size = COALESCE(?, display_size),
+          online = 1,
           last_seen = datetime('now')
         WHERE id = ?`)
         .run(
@@ -48,14 +56,21 @@ router.post('/register', auth, (req, res) => {
           existing.id
         );
       const updated = db.prepare('SELECT * FROM devices WHERE id = ?').get(existing.id);
-      return res.json(updated);
+      return res.json({
+        ...updated,
+        id: String(updated.id),
+        device_token: updated.device_token,
+        name: updated.name || '',
+        status: 'active',
+        paired: true
+      });
     }
 
     const result = db.prepare(`INSERT INTO devices
         (device_token, name, model, manufacturer, android_version, app_version,
          display_width, display_height, display_refresh_rate, display_current_mode,
-         display_supported_rates, display_density, display_orientation, display_size)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+         display_supported_rates, display_density, display_orientation, display_size, online, last_seen)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))`)
       .run(
         device_token, name || null, model || null, manufacturer || null,
         android_version || null, app_version || null,
@@ -69,7 +84,14 @@ router.post('/register', auth, (req, res) => {
     db.prepare(`INSERT INTO activity_events (device_id, event_type, description) VALUES (?, 'DEVICE_REGISTERED', ?)`)
       .run(device.id, `Device "${device.name || device.device_token}" registered`);
 
-    res.status(201).json(device);
+    res.status(201).json({
+      ...device,
+      id: String(device.id),
+      device_token: device.device_token,
+      name: device.name || '',
+      status: 'active',
+      paired: true
+    });
   } catch (err) {
     console.error('Device register error:', err.message);
     res.status(500).json({ error: 'Server error during device registration' });
