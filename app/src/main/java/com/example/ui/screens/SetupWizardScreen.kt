@@ -408,8 +408,8 @@ fun StepFilesAndMedia(
         icon = Icons.Default.FolderOpen,
         tint = Color(0xFF8B5CF6),
         title = "Files & Storage Access",
-        description = "Permits remote diagnostic file explorer and media previews.",
-        whyNeeded = "Required so you can inspect memory structure, explore folders, and verify file states.",
+        description = "Lets you choose a folder on this device and browse its files locally.",
+        whyNeeded = "Android remembers the folder permission you grant in the system picker; protected system and other-app folders remain restricted.",
         isGranted = isGranted,
         onRequest = onRequest
     )
