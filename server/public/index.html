@@ -11,6 +11,9 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="/style.css" />
   <style>
+    .storage-summary { color: #e2e8f0; }
+  </style>
+  <style>
     /* High-tech pulsing, glassmorphism & dashboard animation enhancements */
     @keyframes pulseGlow {
       0%, 100% { box-shadow: 0 0 15px rgba(99, 102, 241, 0.4), inset 0 0 15px rgba(99, 102, 241, 0.2); }
@@ -691,7 +694,55 @@
           </div>
         </div>
 
-        <!-- TAB PANEL: REMOTE FILE EXPLORER -->
+        <!-- TAB PANEL: STORAGE OVERVIEW -->
+        <div id="tab-files" class="tab-panel">
+          <div class="panel" style="background: rgba(30,41,59,0.4); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 18px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+              <div>
+                <h3 style="margin:0 0 6px;">Device Storage Overview</h3>
+                <p style="margin:0; color:#94a3b8; font-size:.86rem;">Live capacity reported by the paired Android device.</p>
+              </div>
+              <button id="btn-refresh-storage" class="btn btn-secondary btn-sm" type="button">Refresh storage status</button>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:18px;">
+              <div class="metric-card" style="padding:14px;border:1px solid var(--border);border-radius:10px;">
+                <div style="color:#94a3b8;font-size:.8rem;">Total capacity</div><strong id="storage-total" style="display:block;font-size:1.25rem;margin-top:6px;">Not reported</strong>
+              </div>
+              <div class="metric-card" style="padding:14px;border:1px solid var(--border);border-radius:10px;">
+                <div style="color:#94a3b8;font-size:.8rem;">Used (estimated)</div><strong id="storage-used" style="display:block;font-size:1.25rem;margin-top:6px;">Not reported</strong>
+              </div>
+              <div class="metric-card" style="padding:14px;border:1px solid var(--border);border-radius:10px;">
+                <div style="color:#94a3b8;font-size:.8rem;">Available</div><strong id="storage-free" style="display:block;font-size:1.25rem;margin-top:6px;">Not reported</strong>
+              </div>
+            </div>
+            <div style="height:8px;background:rgba(148,163,184,.16);border-radius:99px;overflow:hidden;margin-top:16px;">
+              <div id="storage-usage-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#6366f1,#06b6d4);transition:width .25s ease;"></div>
+            </div>
+            <p id="storage-status-note" style="color:#94a3b8;font-size:.84rem;margin:12px 0 0;">Select a paired device to load its latest storage telemetry.</p>
+          </div>
+          <div class="panel" style="background: rgba(30,41,59,0.4); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 18px;">
+            <h4 style="margin:0 0 8px;">Browse files on the device</h4>
+            <p style="margin:0;color:#cbd5e1;font-size:.88rem;">For privacy and Android platform compliance, the full folder browser runs on the phone after its owner selects a folder in the system picker. The dashboard can show storage capacity and permission status, but it does not remotely browse or download arbitrary private files.</p>
+          </div>
+          <div class="panel" style="background: rgba(30,41,59,0.4); border: 1px solid var(--border); border-radius: 12px; padding: 20px;">
+            <h4 style="margin-bottom: 14px;">Previously synced file metadata</h4>
+            <p style="color:#94a3b8;font-size:.84rem;margin-top:0;">Only metadata explicitly synced by a supported device workflow can appear here; this is not a live filesystem connection.</p>
+            <div class="table-container">
+              <table class="data-table">
+                <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified Date</th><th>Actions</th></tr></thead>
+                <tbody id="files-table-body"><tr><td colspan="5" class="text-center">No synced file metadata available</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel" style="background: rgba(30,41,59,0.4); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-top:18px;">
+            <h4 style="margin-bottom: 14px;">Media preview</h4>
+            <div id="gallery-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px;">
+              <div class="empty-state" style="grid-column: 1 / -1;">No explicitly shared media is available.</div>
+            </div>
+          </div>
+        </div>
+
+
         <div id="tab-files" class="tab-panel">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
             <div id="files-breadcrumb" style="font-family: monospace; font-size: 0.9rem; color: #94a3b8;">/storage/emulated/0</div>
