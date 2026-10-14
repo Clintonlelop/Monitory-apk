@@ -1865,198 +1865,39 @@ function renderStorageOverview(device = currentDevice) {
   bar.style.width = Math.min(100, Math.max(0, used / total * 100)).toFixed(1) + '%';
   note.textContent = 'Capacity reflects the latest telemetry received from this device; it is not a live per-file scan.';
 }
-\n// Files Explorer loader
+\n// File metadata loader. Does not download or stream arbitrary device files.
 async function loadDeviceFiles(deviceId) {
+  renderStorageOverview(currentDevice);
+  const tbody = document.getElementById('files-table-body');
+  const gallery = document.getElementById('gallery-container');
+  if (!tbody) return;
   try {
-    const res = await fetch(`/api/devices/${deviceId}/files`, {
+    const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/files`, {
       headers: { 'Authorization': `Bearer ${authToken}` }
     });
-    if (!res.ok) return;
-    const files = await res.json();
-    const tbody = document.getElementById('files-table-body');
-    const galleryContainer = document.getElementById('gallery-container');
-    
-    // Clear & Populate Explorer Table
-    if (!files || files.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center">No files retrieved yet. Send a directory sync command to load.</td></tr>';
-      galleryContainer.innerHTML = '<div class="empty-state" style="grid-column: span 10;">No media records captured. Permission and Scoped Storage verification active.</div>';
+    if (!res.ok) {
+      tbody.innerHTML = '<tr><td colspan="5" class="text-center">Could not load synced metadata.</td></tr>';
       return;
     }
-    
-    window.allDeviceFiles = files;
-    
-    // Auto-detect root path
-    if (!window.fileSystemRootPath) {
-      let shortestPath = '/storage/emulated/0';
-      if (files.length > 0) {
-        shortestPath = files[0].file_path;
-        files.forEach(f => {
-          if (f.file_path.length < shortestPath.length) {
-            shortestPath = f.file_path;
-          }
-        });
-        const matchFile = files.find(f => f.file_path === shortestPath);
-        if (matchFile && !matchFile.is_directory) {
-          const parts = shortestPath.split('/');
-          parts.pop();
-          shortestPath = parts.join('/') || '/';
-        }
-      }
-      window.fileSystemRootPath = shortestPath;
+    const files = await res.json();
+    if (!Array.isArray(files) || files.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="text-center">No synced file metadata available.</td></tr>';
+      if (gallery) gallery.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">No explicitly shared media metadata is available.</div>';
+      return;
     }
-    
-    if (!window.currentDirectoryPath) {
-      window.currentDirectoryPath = window.fileSystemRootPath;
-    }
-    
-    window.renderFilesTable = function() {
-      const currentPath = window.currentDirectoryPath || '/storage/emulated/0';
-      
-      const breadcrumbEl = document.getElementById('files-breadcrumb') || (() => {
-        const parentPanel = tbody.closest('.panel');
-        if (parentPanel) {
-          const header = parentPanel.querySelector('.panel-header');
-          if (header) {
-            let bc = document.getElementById('files-breadcrumb');
-            if (!bc) {
-              bc = document.createElement('div');
-              bc.id = 'files-breadcrumb';
-              bc.style.padding = '8px 16px';
-              bc.style.background = 'rgba(255,255,255,0.02)';
-              bc.style.borderBottom = '1px solid var(--border)';
-              bc.style.fontFamily = 'monospace';
-              bc.style.fontSize = '0.85rem';
-              bc.style.color = 'var(--cyan)';
-              bc.style.display = 'flex';
-              bc.style.alignItems = 'center';
-              bc.style.gap = '8px';
-              header.after(bc);
-            }
-            return bc;
-          }
-        }
-        return null;
-      })();
-      
-      if (breadcrumbEl) {
-        breadcrumbEl.innerHTML = `<span>📂 <b>Location:</b> ${escapeHtml(currentPath)}</span>`;
-      }
-      
-      // Filter files directly under currentPath
-      const filtered = window.allDeviceFiles.filter(f => {
-        const parts = f.file_path.split('/');
-        parts.pop();
-        const parent = parts.join('/') || '/';
-        return parent === currentPath;
-      });
-      
-      let rowsHtml = '';
-      
-      if (currentPath !== window.fileSystemRootPath && currentPath !== '/') {
-        rowsHtml += `
-          <tr style="cursor: pointer; background: rgba(6,182,212,0.04);" onclick="navigateFileSystemUp()">
-            <td>🔙</td>
-            <td colspan="5"><span style="color: var(--cyan); font-weight: bold;">.. [Go Up to Parent Directory]</span></td>
-          </tr>
-        `;
-      }
-      
-      if (filtered.length === 0) {
-        rowsHtml += `<tr><td colspan="6" class="text-center" style="padding: 24px;">This directory is empty or has no synced contents.</td></tr>`;
-      } else {
-        rowsHtml += filtered.map(f => {
-          const isDir = f.is_directory;
-          const icon = isDir ? '📁' : '📄';
-          const sizeStr = isDir ? '--' : formatBytes(Number(f.file_size));
-          const dateStr = f.created_at ? new Date(f.created_at).toLocaleString() : 'N/A';
-          
-          let actionHtml = '--';
-          if (!isDir) {
-            const pathEsc = escapeJs(f.file_path);
-            const nameEsc = escapeJs(f.file_name);
-            const mime = f.mime_type || '';
-            const sizeStrEsc = escapeJs(sizeStr);
-            
-            const isMedia = mime.startsWith('image/') || mime.startsWith('video/') || /\.(jpg|jpeg|png|gif|mp4|mov)$/i.test(f.file_name);
-            
-            actionHtml = `
-              <div style="display: flex; gap: 6px;">
-                ${isMedia ? `<button class="btn btn-secondary btn-sm" style="padding: 3px 8px; font-size: 0.72rem;" onclick="openMediaPreview('${nameEsc}', '${pathEsc}', '${sizeStrEsc}', '${escapeJs(mime)}')">👁️ Preview</button>` : ''}
-                <button class="btn btn-primary btn-sm" style="padding: 3px 8px; font-size: 0.72rem; background: var(--cyan); border-color: var(--cyan);" onclick="downloadMediaFile('${pathEsc}', '${nameEsc}')">📥 Download</button>
-              </div>
-            `;
-          }
-          
-          const clickHandler = isDir ? `style="cursor: pointer; background: rgba(6,182,212,0.02);" onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)"` : '';
-          
-          return `
-            <tr ${clickHandler} class="file-row-${isDir ? 'dir' : 'file'}">
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${icon}</td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}><b style="${isDir ? 'color: var(--cyan); text-decoration: underline;' : ''}">${escapeHtml(f.file_name)}</b></td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''} style="font-family: monospace; font-size: 0.8rem; opacity: 0.8;">${escapeHtml(f.file_path)}</td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${sizeStr}</td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${dateStr}</td>
-              <td>${actionHtml}</td>
-            </tr>
-          `;
-        }).join('');
-      }
-      
-      tbody.innerHTML = rowsHtml;
-    };
-    
-    window.navigateFileSystemTo = function(path, event) {
-      if (event) event.stopPropagation();
-      window.currentDirectoryPath = path;
-      window.renderFilesTable();
-    };
-
-    window.navigateFileSystemUp = function() {
-      if (!window.currentDirectoryPath || window.currentDirectoryPath === window.fileSystemRootPath) return;
-      const parts = window.currentDirectoryPath.split('/');
-      parts.pop();
-      window.currentDirectoryPath = parts.join('/') || '/';
-      window.renderFilesTable();
-    };
-
-    window.renderFilesTable();
-
-    // Clear & Populate Media Gallery Preview
-    const mediaFiles = files.filter(f => {
-      const mime = (f.mime_type || '').toLowerCase();
-      return mime.startsWith('image/') || mime.startsWith('video/') || /\.(jpg|jpeg|png|gif|mp4|mov)$/i.test(f.file_name);
-    });
-
-    if (mediaFiles.length === 0) {
-      galleryContainer.innerHTML = '<div class="empty-state" style="grid-column: span 10;">No media records captured. Permission and Scoped Storage verification active.</div>';
-    } else {
-      galleryContainer.innerHTML = mediaFiles.map(f => {
-        const isVideo = (f.mime_type || '').toLowerCase().startsWith('video/') || f.file_name.endsWith('.mp4');
-        const pathEsc = escapeJs(f.file_path);
-        const nameEsc = escapeJs(f.file_name);
-        const sizeStr = formatBytes(Number(f.file_size));
-        const sizeStrEsc = escapeJs(sizeStr);
-        const mimeEsc = escapeJs(f.mime_type || '');
-        
-        return `
-          <div class="stat-card" style="padding: 12px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; min-height: 160px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; text-align: center; cursor: pointer; transition: all 0.2s;" onclick="openMediaPreview('${nameEsc}', '${pathEsc}', '${sizeStrEsc}', '${mimeEsc}')">
-            <div style="font-size: 2.6rem; margin-bottom: 8px; transition: transform 0.2s;">${isVideo ? '🎬' : '🖼️'}</div>
-            <div style="font-size: 0.82rem; font-weight: bold; word-break: break-all; margin-bottom: 4px; max-height: 40px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">${escapeHtml(f.file_name)}</div>
-            <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">${sizeStr}</div>
-            <div style="display: flex; gap: 4px; width: 100%; justify-content: center;">
-              <span class="btn btn-secondary btn-sm" style="padding: 2px 6px; font-size: 0.65rem; pointer-events: none;">👁️ Preview</span>
-              <span class="btn btn-primary btn-sm" style="padding: 2px 6px; font-size: 0.65rem; background: var(--cyan); border-color: var(--cyan); pointer-events: none;">📥 Download</span>
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-  } catch (err) {
-    console.error('Error loading files:', err);
+    tbody.innerHTML = files.map(file => {
+      const name = escapeHtml(file.file_name || 'Unnamed item');
+      const type = escapeHtml(file.mime_type || (file.is_directory ? 'Folder' : 'File'));
+      const size = file.is_directory ? '—' : formatBytes(Number(file.file_size) || 0);
+      const modified = file.modified_at || file.created_at ? new Date(file.modified_at || file.created_at).toLocaleString() : 'Unknown';
+      return `<tr><td>${name}</td><td>${file.is_directory ? 'Folder' : type}</td><td>${size}</td><td>${escapeHtml(modified)}</td><td><span style="color:#94a3b8;font-size:.8rem;">Metadata only</span></td></tr>`;
+    }).join('');
+    if (gallery) gallery.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">Remote previews are disabled. Open files locally on the device after choosing a folder in the Android app.</div>';
+  } catch (_) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center">Network error loading synced metadata.</td></tr>';
   }
 }
 
-// Format bytes helper
 function formatBytes(bytes) {
   if (bytes === 0 || isNaN(bytes)) return '0 Bytes';
   const k = 1024;
