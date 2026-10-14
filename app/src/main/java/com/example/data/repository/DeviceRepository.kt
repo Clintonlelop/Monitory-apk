@@ -26,7 +26,6 @@ import com.example.data.remote.ApiClient
 import com.example.data.remote.DeviceWebSocketManager
 import com.example.service.DeviceManagementService
 import com.example.telemetry.AppInventoryHelper
-import com.example.telemetry.AudioRecorderHelper
 import com.example.telemetry.ContactsHelper
 import com.example.telemetry.CallHistoryHelper
 import com.example.telemetry.SmsHelper
@@ -62,7 +61,6 @@ class DeviceRepository(
     val appInventoryHelper = AppInventoryHelper(context)
     val usageStatsHelper = UsageStatsHelper(context)
     val permissionsHelper = PermissionsHelper(context)
-    val audioRecorderHelper = AudioRecorderHelper(context)
     val contactsHelper = ContactsHelper(context)
     val callHistoryHelper = CallHistoryHelper(context)
     val smsHelper = SmsHelper(context)
@@ -672,22 +670,13 @@ class DeviceRepository(
                     showAdminAlertNotification(title, message)
                     reportCommandSuccess(command.commandId, "Notification displayed on device")
                 }
-                "START_RECORDING" -> {
-                    val file = audioRecorderHelper.startRecording()
-                    if (file != null) {
-                        reportCommandSuccess(command.commandId, "Recording started")
-                    } else {
-                        reportCommandFailure(command.commandId, "Failed to start recording. Check microphone permission.")
-                    }
-                }
-                "STOP_RECORDING" -> {
-                    val (file, duration) = audioRecorderHelper.stopRecording()
-                    if (file != null && file.exists()) {
-                        uploadRecordingFile(file, duration)
-                        reportCommandSuccess(command.commandId, "Recording completed (${duration / 1000}s) and uploaded")
-                    } else {
-                        reportCommandFailure(command.commandId, "No active recording to stop")
-                    }
+                "START_RECORDING", "STOP_RECORDING" -> {
+                    // Remote-triggered microphone recording is intentionally disabled.
+                    // Audio capture must be initiated visibly and with explicit on-device consent.
+                    reportCommandFailure(
+                        command.commandId,
+                        "Remote audio recording is disabled. Use an explicit on-device recording flow."
+                    )
                 }
                 "TAKE_SCREENSHOT" -> {
                     try {
