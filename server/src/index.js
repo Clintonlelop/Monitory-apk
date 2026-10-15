@@ -2,6 +2,7 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import { randomInt } from 'node:crypto';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
 import multer from 'multer';
@@ -180,7 +181,7 @@ app.get('/api/auth/me', verifyToken, (req, res) => {
 // ==========================================
 // Admin generates a 6-digit code for device pairing
 app.post('/api/devices/pair-code', verifyToken, async (req, res) => {
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const code = randomInt(100000, 1000000).toString();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
   if (db.isPostgres()) {
@@ -197,7 +198,7 @@ app.post('/api/devices/pair-code', verifyToken, async (req, res) => {
     });
   }
 
-  logAudit(req.user.id, null, 'GENERATE_PAIRING_CODE', { code }, req.ip);
+  logAudit(req.user.id, null, 'GENERATE_PAIRING_CODE', { expiresAt: expiresAt.toISOString() }, req.ip);
   res.json({ code, expiresAt });
 });
 
@@ -211,15 +212,20 @@ app.post('/api/devices/pair', async (req, res) => {
   let validPairing = null;
   if (db.isPostgres()) {
     const result = await db.query(
-      'SELECT * FROM pairing_codes WHERE code = $1 AND used = FALSE AND expires_at > CURRENT_TIMESTAMP',
-      [pairingCode]
+      `UPDATE pairing_codes
+       SET used = TRUE
+       WHERE id = (
+         SELECT id FROM pairing_codes
+         WHERE code = $1 AND used = FALSE AND expires_at > CURRENT_TIMESTAMP
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1
+       )
+       RETURNING *`,
+      [String(pairingCode).trim()]
     );
-    if (result.rows.length > 0) {
-      validPairing = result.rows[0];
-      await db.query('UPDATE pairing_codes SET used = TRUE WHERE id = $1', [validPairing.id]);
-    }
+    if (result.rows.length > 0) validPairing = result.rows[0];
   } else {
-    const entry = db.getMemoryStore().pairing_codes.get(pairingCode);
+    const entry = db.getMemoryStore().pairing_codes.get(String(pairingCode).trim());
     if (entry && !entry.used && new Date() < entry.expires_at) {
       entry.used = true;
       validPairing = entry;
