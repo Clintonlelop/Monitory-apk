@@ -119,6 +119,11 @@ function setupAuth() {
       return;
     }
 
+    if (isRegisterMode && password.length < 12) {
+      showError('Choose a password with at least 12 characters to create the administrator account.');
+      return;
+    }
+
     const prevBtnText = submitBtn.textContent;
     submitBtn.disabled = true;
     submitBtn.textContent = isRegisterMode ? 'Creating Account...' : 'Signing In...';
@@ -135,22 +140,6 @@ function setupAuth() {
           username: email.split('@')[0]
         })
       });
-
-      // If login failed because user doesn't exist yet, auto-register
-      if (!res.ok && !isRegisterMode && (res.status === 401 || res.status === 404)) {
-        const regRes = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email,
-            password,
-            username: email.split('@')[0]
-          })
-        });
-        if (regRes.ok) {
-          res = regRes;
-        }
-      }
 
       const data = await res.json();
       if (res.ok && data.token) {
