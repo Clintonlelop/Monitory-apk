@@ -217,8 +217,8 @@ app.post('/api/devices/pair', async (req, res) => {
        WHERE id = (
          SELECT id FROM pairing_codes
          WHERE code = $1 AND used = FALSE AND expires_at > CURRENT_TIMESTAMP
-         FOR UPDATE SKIP LOCKED
          LIMIT 1
+         FOR UPDATE SKIP LOCKED
        )
        RETURNING *`,
       [String(pairingCode).trim()]
