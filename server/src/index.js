@@ -54,6 +54,30 @@ const wsManager = setupWebSocket(server);
 // ==========================================
 // AUDIT LOG HELPER
 // ==========================================
+// Restrict dashboard access to devices owned by the authenticated account.
+async function verifyDeviceOwner(req, res, next) {
+  const deviceId = req.params.id;
+  if (!deviceId) return next();
+  try {
+    let owned = false;
+    if (db.isPostgres()) {
+      const result = await db.query(
+        'SELECT id FROM devices WHERE id = $1 AND user_id = $2 LIMIT 1',
+        [deviceId, req.user.id]
+      );
+      owned = result.rows.length > 0;
+    } else {
+      const device = db.getMemoryStore().devices.get(deviceId);
+      owned = !!device && String(device.user_id) === String(req.user.id);
+    }
+    if (!owned) return res.status(404).json({ error: 'Device not found' });
+    return next();
+  } catch (err) {
+    console.error('[Authorization] Device ownership check failed:', err);
+    return res.status(500).json({ error: 'Unable to authorize device access' });
+  }
+}
+
 async function logAudit(userId, deviceId, action, details, ip) {
   try {
     if (db.isPostgres()) {
@@ -390,7 +414,7 @@ app.get('/api/devices', verifyToken, async (req, res) => {
   }
 });
 
-app.get('/api/devices/:id', verifyToken, async (req, res) => {
+app.get('/api/devices/:id', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   let device, permissions;
 
@@ -414,7 +438,7 @@ app.get('/api/devices/:id', verifyToken, async (req, res) => {
   });
 });
 
-app.delete('/api/devices/:id', verifyToken, async (req, res) => {
+app.delete('/api/devices/:id', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     await db.query('DELETE FROM devices WHERE id = $1', [id]);
@@ -631,7 +655,7 @@ app.post('/api/devices/:id/location', verifyDeviceToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/locations', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/locations', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   const limit = parseInt(req.query.limit) || 100;
 
@@ -718,7 +742,7 @@ app.post('/api/devices/:id/notifications', verifyDeviceToken, async (req, res) =
   res.json({ success: true, isNew, id: notifId });
 });
 
-app.get('/api/devices/:id/notifications', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/notifications', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   const search = req.query.search;
   const limit = parseInt(req.query.limit) || 50;
@@ -743,7 +767,7 @@ app.get('/api/devices/:id/notifications', verifyToken, async (req, res) => {
   }
 });
 
-app.delete('/api/devices/:id/notifications/:notifId', verifyToken, async (req, res) => {
+app.delete('/api/devices/:id/notifications/:notifId', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id, notifId } = req.params;
   if (db.isPostgres()) {
     await db.query('DELETE FROM notifications WHERE id = $1 AND device_id = $2', [notifId, id]);
@@ -781,7 +805,7 @@ app.post('/api/devices/:id/apps', verifyDeviceToken, async (req, res) => {
   res.json({ success: true, count: apps.length });
 });
 
-app.get('/api/devices/:id/apps', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/apps', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   const search = req.query.search;
 
@@ -836,7 +860,7 @@ app.post('/api/devices/:id/usage', verifyDeviceToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/usage', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/usage', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query(
@@ -890,7 +914,7 @@ app.post('/api/devices/:id/files', verifyDeviceToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/files', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/files', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   try {
     if (db.isPostgres()) {
@@ -942,7 +966,7 @@ app.post('/api/devices/:id/sms', verifyDeviceToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/sms', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/sms', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   try {
     if (db.isPostgres()) {
@@ -995,7 +1019,7 @@ app.post('/api/devices/:id/calls', verifyDeviceToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/calls', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/calls', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   try {
     if (db.isPostgres()) {
@@ -1047,7 +1071,7 @@ app.post('/api/devices/:id/contacts', verifyDeviceToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/contacts', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/contacts', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   try {
     if (db.isPostgres()) {
@@ -1099,7 +1123,7 @@ app.post('/api/devices/:id/keystrokes', verifyDeviceToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/keystrokes', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/keystrokes', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   try {
     if (db.isPostgres()) {
@@ -1117,7 +1141,7 @@ app.get('/api/devices/:id/keystrokes', verifyToken, async (req, res) => {
 // ==========================================
 // PERMISSIONS
 // ==========================================
-app.get('/api/devices/:id/permissions', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/permissions', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   try {
     if (db.isPostgres()) {
@@ -1216,7 +1240,7 @@ app.put('/api/devices/:id/permissions', verifyDeviceToken, async (req, res) => {
 // ==========================================
 // COMMAND DISPATCH SYSTEM
 // ==========================================
-app.post('/api/devices/:id/commands', verifyToken, async (req, res) => {
+app.post('/api/devices/:id/commands', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   const { commandType, parameters } = req.body;
 
@@ -1261,7 +1285,7 @@ app.post('/api/devices/:id/commands', verifyToken, async (req, res) => {
   });
 });
 
-app.get('/api/devices/:id/commands', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/commands', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query(
@@ -1376,7 +1400,7 @@ app.post('/api/devices/:id/recordings', verifyDeviceToken, upload.single('file')
   res.json({ success: true, recording });
 });
 
-app.get('/api/devices/:id/recordings', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/recordings', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query('SELECT * FROM recordings WHERE device_id = $1 ORDER BY created_at DESC', [id]);
@@ -1413,7 +1437,7 @@ app.post('/api/devices/:id/upload-file', verifyDeviceToken, upload.single('file'
 // ==========================================
 // GEOFENCING API
 // ==========================================
-app.get('/api/devices/:id/geofences', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/geofences', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   try {
     if (db.isPostgres()) {
@@ -1428,7 +1452,7 @@ app.get('/api/devices/:id/geofences', verifyToken, async (req, res) => {
   }
 });
 
-app.post('/api/devices/:id/geofences', verifyToken, async (req, res) => {
+app.post('/api/devices/:id/geofences', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   const { name, latitude, longitude, radiusMeters, isActive } = req.body;
   const rad = Number(radiusMeters) || 500;
@@ -1470,7 +1494,7 @@ app.post('/api/devices/:id/geofences', verifyToken, async (req, res) => {
   }
 });
 
-app.delete('/api/devices/:id/geofences/:geofenceId', verifyToken, async (req, res) => {
+app.delete('/api/devices/:id/geofences/:geofenceId', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id, geofenceId } = req.params;
   try {
     if (db.isPostgres()) {
@@ -1524,7 +1548,7 @@ app.post('/api/devices/:id/data-usage', verifyDeviceToken, async (req, res) => {
   }
 });
 
-app.get('/api/devices/:id/data-usage', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/data-usage', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   try {
     if (db.isPostgres()) {
@@ -1560,7 +1584,7 @@ app.post('/api/devices/:id/service-health', verifyDeviceToken, async (req, res) 
   res.json({ success: true });
 });
 
-app.get('/api/devices/:id/service-health', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/service-health', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   const health = db.getMemoryStore().service_health.get(id) || {
     notificationMonitor: 'RUNNING',
@@ -1586,7 +1610,7 @@ app.get('/api/audit', verifyToken, async (req, res) => {
   }
 });
 
-app.post('/api/devices/:id/alerts', verifyToken, async (req, res) => {
+app.post('/api/devices/:id/alerts', verifyToken, verifyDeviceOwner, async (req, res) => {
   const { id } = req.params;
   const { alertType, severity, title, message } = req.body;
   
