@@ -1521,15 +1521,16 @@ function renderCommandLifecycle(cmds) {
   }
   tbody.innerHTML = cmds.slice(0, 20).map(c => {
     let pillClass = 'pill';
-    if (c.status === 'COMPLETED') pillClass = 'pill pill-online';
-    else if (c.status === 'FAILED') pillClass = 'pill pill-offline';
-    else if (c.status === 'EXECUTING') pillClass = 'pill purple';
-    else if (c.status === 'SENDING' || c.status === 'QUEUED') pillClass = 'pill';
+    const normalizedStatus = normalizeCommandStatusForUI(c.status);
+    if (normalizedStatus === 'COMPLETED') pillClass = 'pill pill-online';
+    else if (normalizedStatus === 'FAILED') pillClass = 'pill pill-offline';
+    else if (normalizedStatus === 'RUNNING') pillClass = 'pill purple';
+    else if (normalizedStatus === 'PENDING' || c.status === 'SENDING') pillClass = 'pill';
     
     return `
       <tr>
         <td><b>${escapeHtml(c.command_type || c.commandType || '')}</b></td>
-        <td><span class="${pillClass}">${c.status}</span></td>
+        <td><span class="${pillClass}">${escapeHtml(normalizeCommandStatusForUI(c.status))}</span></td>
         <td style="font-family: monospace; font-size: 0.8rem;">${escapeHtml(c.device_id || currentDevice?.id || '--')}</td>
         <td style="font-size: 0.82rem;">${new Date(Number(c.timestamp)).toLocaleTimeString()}</td>
         <td style="font-size: 0.8rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
