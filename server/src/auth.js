@@ -30,6 +30,24 @@ export function verifyToken(req, res, next) {
   }
 }
 
+export function verifyDeviceToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Device authorization required' });
+  }
+
+  try {
+    const decoded = jwt.verify(authHeader.slice(7), JWT_SECRET);
+    if (decoded.type !== 'device' || !decoded.deviceId || decoded.deviceId !== req.params.id) {
+      return res.status(403).json({ error: 'Device token is not authorized for this device' });
+    }
+    req.device = decoded;
+    next();
+  } catch (_) {
+    return res.status(401).json({ error: 'Invalid or expired device token' });
+  }
+}
+
 export function optionalAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
