@@ -1,5 +1,6 @@
 import { WebSocketServer } from 'ws';
 import { db } from './db.js';
+import { normalizeCommandStatus, canAdvanceCommandStatus, isTerminalCommandStatus } from './sync-utils.js';
 
 export function setupWebSocket(server) {
   const wss = new WebSocketServer({ noServer: true });
@@ -139,22 +140,31 @@ export function setupWebSocket(server) {
         ws.send(JSON.stringify({ type: 'PONG' }));
       }
     } else if (msg.type === 'COMMAND_STATUS') {
-      const { commandId, status, result, errorMessage } = msg;
+      const { commandId, status: rawStatus, result, errorMessage } = msg;
+      const status = normalizeCommandStatus(rawStatus);
+      if (!status || !commandId) return;
       const now = Date.now();
+      let command = null;
 
       if (db.isPostgres()) {
+        const found = await db.query(
+          'SELECT id, device_id, status FROM commands WHERE id = $1 AND device_id = $2 LIMIT 1',
+          [commandId, deviceId]
+        );
+        command = found.rows[0];
+        if (!command || !canAdvanceCommandStatus(command.status, status)) return;
         await db.query(
-          'UPDATE commands SET status = $1, result = $2, error_message = $3, completion_timestamp = $4 WHERE id = $5',
-          [status, result || null, errorMessage || null, now, commandId]
+          'UPDATE commands SET status = $1, result = $2, error_message = $3, completion_timestamp = $4 WHERE id = $5 AND device_id = $6',
+          [status, result ?? null, errorMessage ?? null, isTerminalCommandStatus(status) ? now : null, commandId, deviceId]
         );
       } else {
-        const cmd = db.getMemoryStore().commands.get(commandId);
-        if (cmd) {
-          cmd.status = status;
-          if (result) cmd.result = result;
-          if (errorMessage) cmd.error_message = errorMessage;
-          cmd.completion_timestamp = now;
-        }
+        const store = db.getMemoryStore();
+        command = store.commands.get(commandId);
+        if (!command || (command.deviceId !== deviceId && command.device_id !== deviceId) || !canAdvanceCommandStatus(command.status, status)) return;
+        command.status = status;
+        if (result !== undefined) command.result = result;
+        if (errorMessage !== undefined) command.error_message = errorMessage;
+        command.completion_timestamp = isTerminalCommandStatus(status) ? now : null;
       }
 
       broadcastToDashboards({
@@ -162,8 +172,8 @@ export function setupWebSocket(server) {
         deviceId,
         commandId,
         status,
-        result,
-        errorMessage,
+        result: result ?? null,
+        errorMessage: errorMessage ?? null,
         timestamp: now
       });
     } else if (msg.type === 'ACCESSIBILITY_EVENT') {
