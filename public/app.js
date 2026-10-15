@@ -1457,7 +1457,8 @@ async function loadDeviceCommands(deviceId) {
         tbody.innerHTML = '<tr><td colspan="5" class="text-center">No commands dispatched yet</td></tr>';
       } else {
         tbody.innerHTML = cmds.map(c => {
-          const normalizedStatus = normalizeCommandStatusForUI(c.status);\n          const statusPill = normalizedStatus === 'COMPLETED' ? 'pill-online' : (normalizedStatus === 'FAILED' ? 'pill-offline' : (normalizedStatus === 'RUNNING' ? 'pill purple' : 'pill'));
+          const normalizedStatus = normalizeCommandStatusForUI(c.status);
+          const statusPill = normalizedStatus === 'COMPLETED' ? 'pill-online' : (normalizedStatus === 'FAILED' ? 'pill-offline' : (normalizedStatus === 'RUNNING' ? 'pill purple' : 'pill'));
           return `
             <tr>
               <td style="font-family: monospace; font-size: 0.8rem;">${escapeHtml(c.id || c.commandId || '')}</td>
