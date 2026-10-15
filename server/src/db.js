@@ -13,7 +13,13 @@ let usePostgres = false;
 
 // In-memory mock store for standalone / zero-dependency development
 const memoryStore = {
-  // Development convenience only; production never receives preset accounts.\n  users: process.env.NODE_ENV === 'production' ? [] : [{\n    id: 2, username: 'Clinton', email: 'clintonumelo15@gmail.com',\n    password_hash: '$2a$10$asTM6G2n7Nzc6.7XSyLWWeVu/zBsPMQTHy5Km5l.ieDF2avgwYcHC',\n    role: 'admin', created_at: new Date()\n  }],\n  devices: new Map(),
+  // Development convenience only; production never receives preset accounts.
+  users: process.env.NODE_ENV === 'production' ? [] : [{
+    id: 2, username: 'Clinton', email: 'clintonumelo15@gmail.com',
+    password_hash: '$2a$10$asTM6G2n7Nzc6.7XSyLWWeVu/zBsPMQTHy5Km5l.ieDF2avgwYcHC',
+    role: 'admin', created_at: new Date()
+  }],
+  devices: new Map(),
   pairing_codes: new Map(),
   device_permissions: new Map(),
   locations: [],
@@ -82,7 +88,9 @@ export async function initDb() {
           recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )`);
 
-        // Never seed publicly known administrator credentials.\n\n        console.log('PostgreSQL migrations applied successfully.');
+        // Never seed publicly known administrator credentials.
+
+        console.log('PostgreSQL migrations applied successfully.');
       }
       client.release();
       return;
