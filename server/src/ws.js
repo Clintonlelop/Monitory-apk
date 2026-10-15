@@ -1,4 +1,5 @@
 import { WebSocketServer } from 'ws';
+import jwt from 'jsonwebtoken';
 import { db } from './db.js';
 import { normalizeCommandStatus, canAdvanceCommandStatus, isTerminalCommandStatus } from './sync-utils.js';
 
@@ -11,14 +12,43 @@ export function setupWebSocket(server) {
   server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
     const pathname = url.pathname;
+    const secret = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'dev_secret_key_change_in_production_89214710');
+    const bearer = request.headers.authorization?.startsWith('Bearer ') ? request.headers.authorization.slice(7) : '';
+    const token = pathname === '/ws/device' ? (url.searchParams.get('token') || '') : (bearer || url.searchParams.get('token') || '');
 
-    if (pathname === '/ws/device' || pathname === '/ws/dashboard') {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
+    let decoded;
+    try {
+      if (!secret || secret.length < 32 || !token) throw new Error('Missing token');
+      decoded = jwt.verify(token, secret);
+    } catch (_) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    if (pathname === '/ws/device') {
+      const requestedId = url.searchParams.get('deviceId');
+      if (decoded.type !== 'device' || !decoded.deviceId || decoded.deviceId !== requestedId) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      request.auth = decoded;
+    } else if (pathname === '/ws/dashboard') {
+      if (decoded.type === 'device' || decoded.role === undefined) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      request.auth = decoded;
     } else {
       socket.destroy();
+      return;
     }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
   });
 
   wss.on('connection', (ws, request) => {
