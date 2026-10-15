@@ -92,55 +92,47 @@ app.get(['/health', '/api/health'], (req, res) => {
 // AUTHENTICATION ROUTES
 // ==========================================
 app.post('/api/auth/register', async (req, res) => {
-  const { username, email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password required' });
+  const username = String(req.body.username || '').trim();
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const password = req.body.password;
+  if (!email || typeof password !== 'string' || password.length < 12) {
+    return res.status(400).json({ error: 'Email and a password of at least 12 characters are required' });
   }
-  const name = username || email.split('@')[0] || 'Admin';
-
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'A valid email address is required' });
+  }
+  const name = username || email.split('@')[0];
   try {
-    const hashed = await hashPassword(password);
-    let userId;
-
+    let user;
     if (db.isPostgres()) {
-      const checkRes = await db.query('SELECT id FROM users WHERE email = $1 OR username = $2', [email, name]);
-      if (checkRes.rows.length > 0) {
-        userId = checkRes.rows[0].id;
-        await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashed, userId]);
-      } else {
-        const result = await db.query(
-          'INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, username, email, role',
-          [name, email, hashed, 'admin']
-        );
-        userId = result.rows[0].id;
+      const count = await db.query('SELECT COUNT(*)::int AS count FROM users');
+      if (count.rows[0].count !== 0) {
+        return res.status(403).json({ error: 'Registration is closed. Ask the existing administrator to create an account.' });
       }
+      const hashed = await hashPassword(password);
+      const result = await db.query(
+        'INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, username, email, role',
+        [name, email, hashed, 'admin']
+      );
+      user = result.rows[0];
     } else {
       const store = db.getMemoryStore();
-      const existing = store.users.find(u => u.email === email || u.username === name);
-      if (existing) {
-        userId = existing.id;
-        existing.password_hash = hashed;
-      } else {
-        userId = store.users.length + 1;
-        store.users.push({
-          id: userId,
-          username: name,
-          email,
-          password_hash: hashed,
-          role: 'admin',
-          created_at: new Date()
-        });
+      if (store.users.length !== 0) {
+        return res.status(403).json({ error: 'Registration is closed. Ask the existing administrator to create an account.' });
       }
+      const hashed = await hashPassword(password);
+      user = { id: 1, username: name, email, password_hash: hashed, role: 'admin', created_at: new Date() };
+      store.users.push(user);
     }
-
-    const token = generateToken({ id: userId, username: name, email, role: 'admin' });
-    logAudit(userId, null, 'REGISTER', { email, username: name }, req.ip);
-    res.json({ token, user: { id: userId, username: name, email, role: 'admin' } });
+    const token = generateToken({ id: user.id, username: user.username, email: user.email, role: user.role });
+    await logAudit(user.id, null, 'REGISTER', { email, username: name }, req.ip);
+    return res.status(201).json({ token, user: { id: user.id, username: user.username, email: user.email, role: user.role } });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (err.code === '23505') return res.status(409).json({ error: 'That username or email is already registered' });
+    console.error('[Auth] Registration failed:', err);
+    return res.status(500).json({ error: 'Unable to register right now' });
   }
 });
-
 app.post('/api/auth/login', async (req, res) => {
   const identifier = String(req.body.email || req.body.identifier || req.body.username || '').trim();
   const password = req.body.password;
