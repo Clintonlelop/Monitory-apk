@@ -13,7 +13,7 @@ let usePostgres = false;
 
 // In-memory mock store for standalone / zero-dependency development
 const memoryStore = {
-  // No preset accounts: first administrator must be created explicitly.\n  users: [],\n  devices: new Map(),
+  // Development convenience only; production never receives preset accounts.\n  users: process.env.NODE_ENV === 'production' ? [] : [{\n    id: 2, username: 'Clinton', email: 'clintonumelo15@gmail.com',\n    password_hash: '$2a$10$asTM6G2n7Nzc6.7XSyLWWeVu/zBsPMQTHy5Km5l.ieDF2avgwYcHC',\n    role: 'admin', created_at: new Date()\n  }],\n  devices: new Map(),
   pairing_codes: new Map(),
   device_permissions: new Map(),
   locations: [],
