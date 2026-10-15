@@ -142,58 +142,39 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 app.post('/api/auth/login', async (req, res) => {
-  const email = req.body.email || req.body.identifier || req.body.username;
+  const identifier = String(req.body.email || req.body.identifier || req.body.username || '').trim();
   const password = req.body.password;
-  if (!email || !password) {
+  if (!identifier || typeof password !== 'string' || !password) {
     return res.status(400).json({ error: 'Email/username and password required' });
   }
 
   try {
     let user;
     if (db.isPostgres()) {
-      const result = await db.query('SELECT * FROM users WHERE email = $1 OR username = $1', [email]);
+      const result = await db.query(
+        'SELECT * FROM users WHERE email = $1 OR username = $1 LIMIT 1',
+        [identifier]
+      );
       user = result.rows[0];
     } else {
-      user = db.getMemoryStore().users.find(u => u.email === email || u.username === email);
+      user = db.getMemoryStore().users.find(u => u.email === identifier || u.username === identifier);
     }
 
-    if (!user) {
-      // Auto-register user if not present in DB
-      const hashed = await hashPassword(password);
-      const name = email.split('@')[0] || 'Admin';
-      if (db.isPostgres()) {
-        const result = await db.query(
-          'INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, username, email, role',
-          [name, email, hashed, 'admin']
-        );
-        user = result.rows[0];
-      } else {
-        const store = db.getMemoryStore();
-        user = { id: store.users.length + 1, username: name, email, password_hash: hashed, role: 'admin', created_at: new Date() };
-        store.users.push(user);
-      }
-    } else {
-      const valid = await comparePassword(password, user.password_hash);
-      if (!valid) {
-        // If password changed or differed from seed, update password hash seamlessly
-        const newHash = await hashPassword(password);
-        if (db.isPostgres()) {
-          await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, user.id]);
-        } else {
-          user.password_hash = newHash;
-        }
-      }
+    // Never create accounts or replace passwords during login.
+    if (!user || !user.password_hash || !(await comparePassword(password, user.password_hash))) {
+      return res.status(401).json({ error: 'Invalid email/username or password' });
     }
 
     const token = generateToken({ id: user.id, username: user.username, email: user.email, role: user.role });
-    logAudit(user.id, null, 'LOGIN', { email }, req.ip);
+    await logAudit(user.id, null, 'LOGIN', { email: user.email }, req.ip);
 
-    res.json({
+    return res.json({
       token,
       user: { id: user.id, username: user.username, email: user.email, role: user.role }
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[Auth] Login failed:', err);
+    return res.status(500).json({ error: 'Unable to sign in right now' });
   }
 });
 
