@@ -52,8 +52,11 @@ class NotificationMonitorService : NotificationListenerService() {
             }
 
             val category = sbn.notification?.category
+            val notifKey = sbn.key ?: "${packageName}_${sbn.id}_${sbn.postTime}"
+            val stableId = "${app.preferenceManager.getDeviceId()}_${notifKey.replace("|", "_")}"
 
             val notificationData = NotificationData(
+                id = stableId,
                 deviceId = app.preferenceManager.getDeviceId(),
                 packageName = packageName,
                 appName = appName,

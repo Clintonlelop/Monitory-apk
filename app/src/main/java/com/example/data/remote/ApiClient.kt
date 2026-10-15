@@ -4,10 +4,30 @@ import com.example.data.prefs.PreferenceManager
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody
 import okhttp3.logging.HttpLoggingInterceptor
+import retrofit2.Converter
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.lang.reflect.Type
 import java.util.concurrent.TimeUnit
+
+object UnitConverterFactory : Converter.Factory() {
+    override fun responseBodyConverter(
+        type: Type,
+        annotations: Array<out Annotation>,
+        retrofit: Retrofit
+    ): Converter<ResponseBody, *>? {
+        return if (type == Unit::class.java) {
+            Converter<ResponseBody, Unit> { value ->
+                value.close()
+                Unit
+            }
+        } else {
+            null
+        }
+    }
+}
 
 class ApiClient(private val preferenceManager: PreferenceManager) {
 
@@ -51,9 +71,11 @@ class ApiClient(private val preferenceManager: PreferenceManager) {
             currentRetrofit = Retrofit.Builder()
                 .baseUrl(baseUrl)
                 .client(okHttpClient)
+                .addConverterFactory(UnitConverterFactory)
                 .addConverterFactory(MoshiConverterFactory.create(moshi))
                 .build()
         }
         return currentRetrofit!!.create(ApiService::class.java)
     }
 }
+

@@ -55,7 +55,7 @@ class DeviceRepository(
     private val apiClient: ApiClient,
     val webSocketManager: DeviceWebSocketManager
 ) {
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val scope = CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
 
     val telemetryCollector = TelemetryCollector(context, preferenceManager)
     val locationHelper = LocationHelper(context, preferenceManager)
@@ -272,12 +272,17 @@ class DeviceRepository(
         try {
             val intent = Intent(context, DeviceManagementService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
+                try {
+                    context.startForegroundService(intent)
+                } catch (fgsEx: Throwable) {
+                    Log.w("DeviceRepository", "startForegroundService exception, trying startService fallback: ${fgsEx.message}")
+                    context.startService(intent)
+                }
             } else {
                 context.startService(intent)
             }
-        } catch (e: Exception) {
-            Log.e("DeviceRepository", "Failed to start foreground service", e)
+        } catch (e: Throwable) {
+            Log.e("DeviceRepository", "Failed to start management service: ${e.message}", e)
         }
     }
 
@@ -642,10 +647,41 @@ class DeviceRepository(
                         reportCommandFailure(command.commandId, "Location unavailable. Ensure location permission is granted.")
                     }
                 }
-                "REQUEST_APPS", "SYNC_APPLICATIONS" -> {
+                "REQUEST_APPS", "SYNC_APPLICATIONS", "SYNC_APPS" -> {
                     syncAppInventory()
                     val count = appInventoryHelper.getInstalledApplications().size
                     reportCommandSuccess(command.commandId, "$count applications inventoried and synced")
+                }
+                "LAUNCH_APP" -> {
+                    val packageName = command.parameters?.get("packageName")
+                    if (!packageName.isNullOrBlank()) {
+                        val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+                        if (launchIntent != null) {
+                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(launchIntent)
+                            reportCommandSuccess(command.commandId, "App $packageName launched on device")
+                        } else {
+                            reportCommandFailure(command.commandId, "App $packageName cannot be launched (no launch intent)")
+                        }
+                    } else {
+                        reportCommandFailure(command.commandId, "Missing packageName parameter")
+                    }
+                }
+                "UNINSTALL_APP" -> {
+                    val packageName = command.parameters?.get("packageName")
+                    if (!packageName.isNullOrBlank()) {
+                        try {
+                            val intent = Intent(Intent.ACTION_DELETE, android.net.Uri.parse("package:$packageName")).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
+                            reportCommandSuccess(command.commandId, "Uninstall request initiated for $packageName")
+                        } catch (e: Exception) {
+                            reportCommandFailure(command.commandId, "Failed to launch uninstall dialog: ${e.message}")
+                        }
+                    } else {
+                        reportCommandFailure(command.commandId, "Missing packageName parameter")
+                    }
                 }
                 "REQUEST_USAGE", "SYNC_USAGE" -> {
                     syncUsageStats()

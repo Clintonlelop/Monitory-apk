@@ -8,6 +8,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,12 +24,13 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 class DeviceWebSocketManager(
     private val preferenceManager: PreferenceManager
 ) {
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var webSocket: WebSocket? = null
     private var pingJob: Job? = null
     private var reconnectJob: Job? = null
@@ -41,6 +43,7 @@ class DeviceWebSocketManager(
 
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
         .build()
 
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
@@ -50,70 +53,96 @@ class DeviceWebSocketManager(
         if (!preferenceManager.isPaired()) return
         if (_isConnected.value) return
 
-        val serverUrl = preferenceManager.getServerUrl()
-        val wsUrl = serverUrl
-            .replace("https://", "wss://")
-            .replace("http://", "ws://")
-            .let { if (it.endsWith("/")) it else "$it/" } +
-                "ws/device?deviceId=${preferenceManager.getDeviceId()}&token=${preferenceManager.getAuthToken() ?: ""}"
+        try {
+            val serverUrl = preferenceManager.getServerUrl().trim()
+            if (serverUrl.isBlank()) return
 
-        val request = Request.Builder().url(wsUrl).build()
-
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d("DeviceWS", "Connected to device management WebSocket")
-                _isConnected.value = true
-                startHeartbeat()
-                
-                // Send initial ONLINE notification
-                val onlineMsg = JSONObject().apply {
-                    put("type", "DEVICE_ONLINE")
-                    put("deviceId", preferenceManager.getDeviceId())
-                    put("timestamp", System.currentTimeMillis())
-                }
-                webSocket.send(onlineMsg.toString())
+            val cleanUrl = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
+            var wsBase = cleanUrl
+                .replace("https://", "wss://")
+                .replace("http://", "ws://")
+            if (!wsBase.startsWith("ws://") && !wsBase.startsWith("wss://")) {
+                wsBase = "ws://$wsBase"
             }
 
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.d("DeviceWS", "Received WS message: $text")
-                try {
-                    val json = JSONObject(text)
-                    val type = json.optString("type")
-                    if (type == "COMMAND") {
-                        val commandJson = json.optJSONObject("command")?.toString() ?: text
-                        val command = commandAdapter.fromJson(commandJson)
-                        if (command != null) {
-                            scope.launch {
-                                _incomingCommands.emit(command)
+            val deviceId = URLEncoder.encode(preferenceManager.getDeviceId(), "UTF-8")
+            val token = URLEncoder.encode(preferenceManager.getAuthToken() ?: "", "UTF-8")
+            val fullWsUrl = "${wsBase}ws/device?deviceId=$deviceId&token=$token"
+
+            val request = Request.Builder().url(fullWsUrl).build()
+
+            try {
+                webSocket?.close(1000, "Reconnecting")
+            } catch (_: Exception) {}
+
+            webSocket = client.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    Log.d("DeviceWS", "Connected to device management WebSocket")
+                    _isConnected.value = true
+                    startHeartbeat()
+
+                    // Send initial ONLINE notification
+                    try {
+                        val onlineMsg = JSONObject().apply {
+                            put("type", "DEVICE_ONLINE")
+                            put("deviceId", preferenceManager.getDeviceId())
+                            put("timestamp", System.currentTimeMillis())
+                        }
+                        webSocket.send(onlineMsg.toString())
+                    } catch (e: Exception) {
+                        Log.w("DeviceWS", "Failed to send initial ONLINE msg: ${e.message}")
+                    }
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    Log.d("DeviceWS", "Received WS message: $text")
+                    try {
+                        val json = JSONObject(text)
+                        val type = json.optString("type")
+                        if (type == "COMMAND") {
+                            val commandJson = json.optJSONObject("command")?.toString() ?: text
+                            val command = commandAdapter.fromJson(commandJson)
+                            if (command != null) {
+                                scope.launch {
+                                    try {
+                                        _incomingCommands.emit(command)
+                                    } catch (e: Exception) {
+                                        Log.e("DeviceWS", "Error emitting incoming command", e)
+                                    }
+                                }
                             }
                         }
-                    } else if (type == "PONG") {
-                        // Heartbeat acknowledged
+                    } catch (e: Exception) {
+                        Log.e("DeviceWS", "Error parsing message", e)
                     }
-                } catch (e: Exception) {
-                    Log.e("DeviceWS", "Error parsing message", e)
                 }
-            }
 
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                webSocket.close(1000, null)
-                _isConnected.value = false
-                stopHeartbeat()
-            }
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    try {
+                        webSocket.close(1000, null)
+                    } catch (_: Exception) {}
+                    _isConnected.value = false
+                    stopHeartbeat()
+                }
 
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                _isConnected.value = false
-                stopHeartbeat()
-                scheduleReconnect()
-            }
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    _isConnected.value = false
+                    stopHeartbeat()
+                    scheduleReconnect()
+                }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w("DeviceWS", "WebSocket failure: ${t.message}")
-                _isConnected.value = false
-                stopHeartbeat()
-                scheduleReconnect()
-            }
-        })
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    Log.w("DeviceWS", "WebSocket failure: ${t.message}")
+                    _isConnected.value = false
+                    stopHeartbeat()
+                    scheduleReconnect()
+                }
+            })
+        } catch (e: Exception) {
+            Log.e("DeviceWS", "Error setting up WebSocket: ${e.message}", e)
+            _isConnected.value = false
+            scheduleReconnect()
+        }
     }
 
     fun disconnect() {
@@ -127,29 +156,37 @@ class DeviceWebSocketManager(
     }
 
     fun sendCommandStatus(commandId: String, status: String, result: String? = null, error: String? = null) {
-        val payload = JSONObject().apply {
-            put("type", "COMMAND_STATUS")
-            put("commandId", commandId)
-            put("deviceId", preferenceManager.getDeviceId())
-            put("status", status)
-            if (result != null) put("result", result)
-            if (error != null) put("errorMessage", error)
-            put("timestamp", System.currentTimeMillis())
+        try {
+            val payload = JSONObject().apply {
+                put("type", "COMMAND_STATUS")
+                put("commandId", commandId)
+                put("deviceId", preferenceManager.getDeviceId())
+                put("status", status)
+                if (result != null) put("result", result)
+                if (error != null) put("errorMessage", error)
+                put("timestamp", System.currentTimeMillis())
+            }
+            webSocket?.send(payload.toString())
+        } catch (e: Exception) {
+            Log.w("DeviceWS", "Error sending command status: ${e.message}")
         }
-        webSocket?.send(payload.toString())
     }
 
     fun sendAccessibilityEvent(packageName: String, className: String, text: String) {
         if (!_isConnected.value) return
-        val payload = JSONObject().apply {
-            put("type", "ACCESSIBILITY_EVENT")
-            put("deviceId", preferenceManager.getDeviceId())
-            put("packageName", packageName)
-            put("className", className)
-            put("text", text)
-            put("timestamp", System.currentTimeMillis())
+        try {
+            val payload = JSONObject().apply {
+                put("type", "ACCESSIBILITY_EVENT")
+                put("deviceId", preferenceManager.getDeviceId())
+                put("packageName", packageName)
+                put("className", className)
+                put("text", text)
+                put("timestamp", System.currentTimeMillis())
+            }
+            webSocket?.send(payload.toString())
+        } catch (e: Exception) {
+            Log.w("DeviceWS", "Error sending accessibility event: ${e.message}")
         }
-        webSocket?.send(payload.toString())
     }
 
     private fun startHeartbeat() {
@@ -180,9 +217,13 @@ class DeviceWebSocketManager(
         if (!preferenceManager.isPaired()) return
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
-            delay(5_000)
-            if (!_isConnected.value) {
-                connect()
+            try {
+                delay(5_000)
+                if (!_isConnected.value && preferenceManager.isPaired()) {
+                    connect()
+                }
+            } catch (e: Exception) {
+                Log.w("DeviceWS", "scheduleReconnect cancelled or error: ${e.message}")
             }
         }
     }

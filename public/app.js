@@ -1224,20 +1224,74 @@ async function loadDeviceApps(deviceId) {
     if (!res.ok) return;
     const apps = await res.json();
     const tbody = document.getElementById('apps-table-body');
+    if (!tbody) return;
     if (apps.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" class="text-center">No applications inventoried. Click "Refresh Inventory".</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" class="text-center">No applications inventoried. Click "Refresh Inventory".</td></tr>';
       return;
     }
-    tbody.innerHTML = apps.map(a => `
-      <tr>
-        <td><b>${escapeHtml(a.app_name || a.appName)}</b></td>
-        <td style="font-family: monospace; font-size: 0.82rem;">${escapeHtml(a.package_name || a.packageName)}</td>
-        <td>v${escapeHtml(a.version_name || a.versionName || '1.0')}</td>
-        <td><span class="pill ${a.is_system_app || a.isSystemApp ? 'pill-offline' : 'pill-online'}">${a.is_system_app || a.isSystemApp ? 'SYSTEM' : 'USER'}</span></td>
-      </tr>
-    `).join('');
+    tbody.innerHTML = apps.map(a => {
+      const pkg = escapeHtml(a.package_name || a.packageName || '');
+      const isSys = a.is_system_app || a.isSystemApp;
+      return `
+        <tr>
+          <td><b>${escapeHtml(a.app_name || a.appName)}</b></td>
+          <td style="font-family: monospace; font-size: 0.82rem;">${pkg}</td>
+          <td>v${escapeHtml(a.version_name || a.versionName || '1.0')}</td>
+          <td><span class="pill ${isSys ? 'pill-offline' : 'pill-online'}">${isSys ? 'SYSTEM' : 'USER'}</span></td>
+          <td>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn btn-sm" style="padding: 3px 8px; font-size: 0.75rem;" onclick="launchApp('${deviceId}', '${pkg}')">🚀 Launch</button>
+              <button class="btn btn-sm btn-danger" style="padding: 3px 8px; font-size: 0.75rem;" onclick="uninstallApp('${deviceId}', '${pkg}')">🗑️ Uninstall</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
   } catch (_) {}
 }
+
+window.launchApp = async function(deviceId, packageName) {
+  try {
+    const res = await fetch(`/api/devices/${deviceId}/commands`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        commandType: 'LAUNCH_APP',
+        parameters: { packageName }
+      })
+    });
+    if (res.ok) {
+      pushConsoleTimeline('COMMANDS', 'App Launch Command', `Sent launch command for ${packageName}`, 'info');
+    }
+  } catch (e) {
+    console.error('Launch app error:', e);
+  }
+};
+
+window.uninstallApp = async function(deviceId, packageName) {
+  if (!confirm(`Request uninstall for app package ${packageName}?`)) return;
+  try {
+    const res = await fetch(`/api/devices/${deviceId}/commands`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        commandType: 'UNINSTALL_APP',
+        parameters: { packageName }
+      })
+    });
+    if (res.ok) {
+      pushConsoleTimeline('COMMANDS', 'App Uninstall Command', `Sent uninstall request for ${packageName}`, 'warning');
+    }
+  } catch (e) {
+    console.error('Uninstall app error:', e);
+  }
+};
 
 // App Usage
 async function loadDeviceUsage(deviceId) {

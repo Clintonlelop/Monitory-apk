@@ -20,10 +20,18 @@ class PreferenceManager(context: Context) {
 
     fun getServerUrl(): String {
         val saved = prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
-        if (saved.contains("10.0.2.2") || saved.contains("localhost")) {
+        if (saved.contains("10.0.2.2") || saved.contains("localhost") || saved.contains("etjoqfdf2ox4fsj5y37jnh")) {
             return DEFAULT_SERVER_URL
         }
-        return saved
+        var formatted = saved.trim().removeSuffix("/")
+        if (!formatted.startsWith("http://") && !formatted.startsWith("https://")) {
+            formatted = if (formatted.matches(Regex("^[0-9.]+(?::[0-9]+)?.*$"))) {
+                "http://$formatted"
+            } else {
+                "https://$formatted"
+            }
+        }
+        return formatted
     }
 
     fun getPublicWebUrl(): String {
@@ -31,7 +39,14 @@ class PreferenceManager(context: Context) {
     }
 
     fun setServerUrl(url: String) {
-        val trimmed = url.trim().removeSuffix("/")
+        var trimmed = url.trim().removeSuffix("/")
+        if (trimmed.isNotBlank() && !trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+            trimmed = if (trimmed.matches(Regex("^[0-9.]+(?::[0-9]+)?.*$"))) {
+                "http://$trimmed"
+            } else {
+                "https://$trimmed"
+            }
+        }
         prefs.edit().putString(KEY_SERVER_URL, trimmed).apply()
     }
 
@@ -128,7 +143,7 @@ class PreferenceManager(context: Context) {
     }
 
     companion object {
-        const val DEFAULT_SERVER_URL = "https://ais-dev-etjoqfdf2ox4fsj5y37jnh-77493896896.europe-west3.run.app"
+        const val DEFAULT_SERVER_URL = "https://ais-dev-iga3y2yico5lrw2r2s77lh-77493896896.europe-west3.run.app"
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_USER_EMAIL = "user_email"
         private const val KEY_USER_TOKEN = "user_token"

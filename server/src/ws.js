@@ -114,10 +114,18 @@ export function setupWebSocket(server) {
   async function updateDeviceStatus(deviceId, status) {
     const now = new Date();
     if (db.isPostgres()) {
-      await db.query('UPDATE devices SET status = $1, last_seen = $2 WHERE id = $3', [status, now, deviceId]);
+      await db.query(
+        `INSERT INTO devices (id, device_name, manufacturer, model, status, last_seen)
+         VALUES ($1, 'Android Device', 'Android', 'Device', $2, $3)
+         ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, last_seen = EXCLUDED.last_seen`,
+        [deviceId, status, now]
+      );
     } else {
-      const dev = db.getMemoryStore().devices.get(deviceId);
-      if (dev) {
+      let dev = db.getMemoryStore().devices.get(deviceId);
+      if (!dev) {
+        dev = { id: deviceId, device_name: 'Android Device', status, last_seen: now };
+        db.getMemoryStore().devices.set(deviceId, dev);
+      } else {
         dev.status = status;
         dev.last_seen = now;
       }
