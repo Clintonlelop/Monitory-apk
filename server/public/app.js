@@ -10,6 +10,18 @@ let mapPolyline = null;
 let locationHistory = [];
 let pairingTimer = null;
 
+function normalizeCommandStatusForUI(value) {
+  const status = String(value || '').trim().toUpperCase().replace(/[ -]+/g, '_');
+  const aliases = {
+    QUEUED: 'PENDING', STARTED: 'RUNNING', EXECUTING: 'RUNNING',
+    PROCESSING: 'RUNNING', IN_PROGRESS: 'RUNNING',
+    SUCCESS: 'COMPLETED', SUCCEEDED: 'COMPLETED', DONE: 'COMPLETED',
+    ERROR: 'FAILED', FAILURE: 'FAILED', TIMEOUT: 'FAILED', TIMED_OUT: 'FAILED',
+    CANCELED: 'CANCELLED'
+  };
+  return aliases[status] || status || 'UNKNOWN';
+}
+
 // DOM Elements
 const authModal = document.getElementById('auth-modal');
 const loginForm = document.getElementById('login-form');
@@ -1445,7 +1457,7 @@ async function loadDeviceCommands(deviceId) {
         tbody.innerHTML = '<tr><td colspan="5" class="text-center">No commands dispatched yet</td></tr>';
       } else {
         tbody.innerHTML = cmds.map(c => {
-          const statusPill = c.status === 'COMPLETED' ? 'pill-online' : (c.status === 'FAILED' ? 'pill-offline' : 'pill');
+          const normalizedStatus = normalizeCommandStatusForUI(c.status);\n          const statusPill = normalizedStatus === 'COMPLETED' ? 'pill-online' : (normalizedStatus === 'FAILED' ? 'pill-offline' : (normalizedStatus === 'RUNNING' ? 'pill purple' : 'pill'));
           return `
             <tr>
               <td style="font-family: monospace; font-size: 0.8rem;">${escapeHtml(c.id || c.commandId || '')}</td>
@@ -1474,10 +1486,10 @@ async function loadDeviceCommands(deviceId) {
         // Find latest command of this type
         const latest = cmds.find(c => (c.command_type || c.commandType) === type);
         if (latest) {
-          statusEl.textContent = latest.status;
-          if (latest.status === 'COMPLETED') {
+          statusEl.textContent = normalizeCommandStatusForUI(latest.status);
+          if (normalizeCommandStatusForUI(latest.status) === 'COMPLETED') {
             statusEl.style.color = '#34d399'; // green
-          } else if (latest.status === 'FAILED') {
+          } else if (normalizeCommandStatusForUI(latest.status) === 'FAILED') {
             statusEl.style.color = '#f87171'; // red
           } else if (latest.status === 'QUEUED' || latest.status === 'SENDING' || latest.status === 'RECEIVED' || latest.status === 'EXECUTING') {
             statusEl.innerHTML = `<span style="display: inline-block; animation: pulse-ring 1.5s infinite;">⏳ ${latest.status}</span>`;
