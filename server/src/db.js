@@ -13,25 +13,7 @@ let usePostgres = false;
 
 // In-memory mock store for standalone / zero-dependency development
 const memoryStore = {
-  users: [
-    {
-      id: 1,
-      username: 'admin',
-      email: 'admin@devicemanager.local',
-      password_hash: '$2a$10$QvHYQSNHS4SFoHhuM7jZVuwXAXCIy7e3gaH9qnQxAf8QZsvC97zrS', // password: admin
-      role: 'admin',
-      created_at: new Date()
-    },
-    {
-      id: 2,
-      username: 'Clinton',
-      email: 'clintonumelo15@gmail.com',
-      password_hash: '$2a$10$asTM6G2n7Nzc6.7XSyLWWeVu/zBsPMQTHy5Km5l.ieDF2avgwYcHC', // password: admin123
-      role: 'admin',
-      created_at: new Date()
-    }
-  ],
-  devices: new Map(),
+  // No preset accounts: first administrator must be created explicitly.\n  users: [],\n  devices: new Map(),
   pairing_codes: new Map(),
   device_permissions: new Map(),
   locations: [],
@@ -100,28 +82,12 @@ export async function initDb() {
           recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )`);
 
-        // Insert default users if not exists
-        await client.query(`
-          INSERT INTO users (id, username, email, password_hash, role)
-          VALUES 
-            (1, 'admin', 'admin@devicemanager.local', '$2a$10$w85v21rIe/EaG1o4wQ1i7O3Z22fRkFf1F9FkHqT7c2.k9mE5iAxeG', 'admin'),
-            (2, 'Clinton', 'clintonumelo15@gmail.com', '$2a$10$asTM6G2n7Nzc6.7XSyLWWeVu/zBsPMQTHy5Km5l.ieDF2avgwYcHC', 'admin')
-          ON CONFLICT (id) DO NOTHING
-        `);
-        await client.query(`
-          INSERT INTO users (username, email, password_hash, role)
-          VALUES 
-            ('admin', 'admin@devicemanager.local', '$2a$10$w85v21rIe/EaG1o4wQ1i7O3Z22fRkFf1F9FkHqT7c2.k9mE5iAxeG', 'admin'),
-            ('Clinton', 'clintonumelo15@gmail.com', '$2a$10$asTM6G2n7Nzc6.7XSyLWWeVu/zBsPMQTHy5Km5l.ieDF2avgwYcHC', 'admin')
-          ON CONFLICT (email) DO NOTHING
-        `);
-
-        console.log('PostgreSQL migrations applied successfully.');
+        // Never seed publicly known administrator credentials.\n\n        console.log('PostgreSQL migrations applied successfully.');
       }
       client.release();
       return;
     } catch (err) {
-      console.warn('PostgreSQL connection failed, falling back to embedded in-memory database:', err.message);
+      console.error('PostgreSQL connection failed; refusing to silently fall back to volatile storage:', err.message);
       pool = null;
       usePostgres = false;
     }
