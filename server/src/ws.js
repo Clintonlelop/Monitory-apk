@@ -85,6 +85,8 @@ export function setupWebSocket(server) {
 
       ws.on('close', () => {
         console.log(`[WS] Android device disconnected: ${deviceId}`);
+        // A stale socket must not mark a newer reconnect as offline.
+        if (deviceSockets.get(deviceId) !== ws) return;
         deviceSockets.delete(deviceId);
         updateDeviceStatus(deviceId, 'OFFLINE');
         broadcastToDashboards({
