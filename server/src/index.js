@@ -426,7 +426,7 @@ app.delete('/api/devices/:id', verifyToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/devices/:id/disconnect', optionalAuth, async (req, res) => {
+app.delete('/api/devices/:id/disconnect', verifyToken, async (req, res) => {
   const { id } = req.params;
   const now = new Date();
   if (db.isPostgres()) {
@@ -1170,7 +1170,7 @@ app.get('/api/devices/:id/permissions', verifyToken, async (req, res) => {
   }
 });
 
-app.put('/api/devices/:id/permissions', async (req, res) => {
+app.put('/api/devices/:id/permissions', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const perms = req.body;
 
@@ -1322,6 +1322,26 @@ app.post('/api/devices/:id/commands/:commandId/status', verifyDeviceToken, async
 // ==========================================
 // AUDIO & FILE UPLOADS
 // ==========================================
+// Device camera uploads are accepted only from the paired device token.
+app.post('/api/devices/:id/camera', verifyDeviceToken, upload.single('file'), async (req, res) => {
+  const { id } = req.params;
+  if (!req.file) return res.status(400).json({ success: false, error: 'File required' });
+  const capture = {
+    id: Date.now(),
+    device_id: id,
+    file_name: req.file.filename,
+    file_path: `/uploads/${req.file.filename}`,
+    timestamp: req.body.timestamp || new Date().toISOString(),
+    created_at: new Date()
+  };
+  wsManager.broadcastToDashboards({
+    type: 'DEVICE_CAMERA_CAPTURE_UPLOADED',
+    deviceId: id,
+    capture
+  });
+  return res.json({ success: true, capture });
+});
+
 app.post('/api/devices/:id/recordings', verifyDeviceToken, upload.single('file'), async (req, res) => {
   const { id } = req.params;
   const durationMs = parseInt(req.body.durationMs) || 0;
