@@ -426,7 +426,7 @@ app.delete('/api/devices/:id', verifyToken, async (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/devices/:id/disconnect', verifyToken, async (req, res) => {
+app.delete('/api/devices/:id/disconnect', verifyDeviceToken, async (req, res) => {
   const { id } = req.params;
   const now = new Date();
   if (db.isPostgres()) {
