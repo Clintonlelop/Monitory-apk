@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_change_in_production_89214710';
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'dev_secret_key_change_in_production_89214710');\nif (!JWT_SECRET || JWT_SECRET.length < 32) {\n  throw new Error('JWT_SECRET must be configured to a random value of at least 32 characters in production.');\n}
 
 export function generateToken(payload, expiresIn = '7d') {
   return jwt.sign(payload, JWT_SECRET, { expiresIn });
