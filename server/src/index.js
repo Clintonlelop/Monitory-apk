@@ -7,6 +7,7 @@ import cors from 'cors';
 import multer from 'multer';
 import { initDb, db } from './db.js';
 import { setupWebSocket } from './ws.js';
+import { normalizeCommandStatus, canAdvanceCommandStatus, isTerminalCommandStatus } from './sync-utils.js';
 import { generateToken, verifyToken, optionalAuth, hashPassword, comparePassword } from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1272,35 +1273,44 @@ app.get('/api/devices/:id/commands', verifyToken, async (req, res) => {
 
 app.post('/api/devices/:id/commands/:commandId/status', async (req, res) => {
   const { id, commandId } = req.params;
-  const { status, result, errorMessage } = req.body;
+  const { status: rawStatus, result, errorMessage } = req.body;
+  const status = normalizeCommandStatus(rawStatus);
+  if (!status) return res.status(400).json({ success: false, error: 'Unsupported command status' });
   const now = Date.now();
+  let command = null;
 
   if (db.isPostgres()) {
+    const found = await db.query('SELECT id, device_id, status FROM commands WHERE id = $1 AND device_id = $2 LIMIT 1', [commandId, id]);
+    command = found.rows[0];
+    if (!command) return res.status(404).json({ success: false, error: 'Command not found for this device' });
+    if (!canAdvanceCommandStatus(command.status, status)) {
+      return res.status(409).json({ success: false, error: 'Invalid command status transition', currentStatus: normalizeCommandStatus(command.status), requestedStatus: status });
+    }
+    const completedAt = isTerminalCommandStatus(status) ? now : null;
     await db.query(
       'UPDATE commands SET status = $1, result = $2, error_message = $3, completion_timestamp = $4 WHERE id = $5 AND device_id = $6',
-      [status, result || null, errorMessage || null, now, commandId, id]
+      [status, result ?? null, errorMessage ?? null, completedAt, commandId, id]
     );
   } else {
-    const cmd = db.getMemoryStore().commands.get(commandId);
-    if (cmd) {
-      cmd.status = status;
-      cmd.result = result;
-      cmd.errorMessage = errorMessage;
-      cmd.completion_timestamp = now;
+    const store = db.getMemoryStore();
+    command = store.commands.get(commandId);
+    if (!command || (command.deviceId !== id && command.device_id !== id)) {
+      return res.status(404).json({ success: false, error: 'Command not found for this device' });
     }
+    if (!canAdvanceCommandStatus(command.status, status)) {
+      return res.status(409).json({ success: false, error: 'Invalid command status transition', currentStatus: normalizeCommandStatus(command.status), requestedStatus: status });
+    }
+    command.status = status;
+    if (result !== undefined) command.result = result;
+    if (errorMessage !== undefined) command.error_message = errorMessage;
+    command.completion_timestamp = isTerminalCommandStatus(status) ? now : null;
   }
 
   wsManager.broadcastToDashboards({
-    type: 'COMMAND_STATUS_UPDATED',
-    deviceId: id,
-    commandId,
-    status,
-    result,
-    errorMessage,
-    timestamp: now
+    type: 'COMMAND_STATUS_UPDATED', deviceId: id, commandId, status,
+    result: result ?? null, errorMessage: errorMessage ?? null, timestamp: now
   });
-
-  res.json({ success: true });
+  return res.json({ success: true, commandId, status });
 });
 
 // ==========================================
