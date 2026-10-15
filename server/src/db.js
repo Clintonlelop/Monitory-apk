@@ -95,11 +95,20 @@ export async function initDb() {
       client.release();
       return;
     } catch (err) {
-      console.error('PostgreSQL connection failed; refusing to silently fall back to volatile storage:', err.message);
-      pool = null;
+      console.error('PostgreSQL initialization failed:', err.message);
       usePostgres = false;
+      if (pool) {
+        try { await pool.end(); } catch (_) {}
+      }
+      pool = null;
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('Production startup aborted because PostgreSQL could not be initialized.');
+      }
     }
   } else {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL or PGHOST is required in production; refusing to start with volatile storage.');
+    }
     console.log('No DATABASE_URL provided. Running with integrated embedded data store.');
   }
 }
