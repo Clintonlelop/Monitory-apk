@@ -263,7 +263,7 @@ function showView(viewName) {
 // WebSocket Live Real-Time Connection
 function connectWebSocket() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${location.host}/ws/dashboard`;
+  const wsUrl = `${protocol}//${location.host}/ws/dashboard?token=${encodeURIComponent(authToken || '')}`;
 
   ws = new WebSocket(wsUrl);
 
