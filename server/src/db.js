@@ -79,6 +79,10 @@ export async function initDb() {
         await client.query('ALTER TABLE device_permissions ADD COLUMN IF NOT EXISTS calls BOOLEAN DEFAULT FALSE');
         await client.query('ALTER TABLE device_permissions ADD COLUMN IF NOT EXISTS sms BOOLEAN DEFAULT FALSE');
         await client.query('ALTER TABLE device_permissions ADD COLUMN IF NOT EXISTS accessibility BOOLEAN DEFAULT FALSE');
+        await client.query('ALTER TABLE pairing_codes ADD COLUMN IF NOT EXISTS environment VARCHAR(100) DEFAULT \'Default\'');
+        await client.query('ALTER TABLE pairing_codes ADD COLUMN IF NOT EXISTS revoked BOOLEAN DEFAULT FALSE');
+        await client.query('ALTER TABLE pairing_codes ADD COLUMN IF NOT EXISTS used_at TIMESTAMP WITH TIME ZONE');
+        await client.query('ALTER TABLE pairing_codes ADD COLUMN IF NOT EXISTS device_id VARCHAR(100)');
         await client.query(`CREATE TABLE IF NOT EXISTS geofences (
           id SERIAL PRIMARY KEY,
           device_id VARCHAR(64) REFERENCES devices(id) ON DELETE CASCADE,

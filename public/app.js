@@ -21,6 +21,7 @@ const logoutBtn = document.getElementById('logout-btn');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
+  setupTheme();
   setupNavigation();
   setupAuth();
   setupPairingModal();
@@ -58,6 +59,44 @@ function handleUnauthorized() {
   if (ws) {
     try { ws.close(); } catch (_) {}
   }
+}
+
+// Theme Toggle System (Light / Dark / System Auto)
+function setupTheme() {
+  const themeToggleBtn = document.getElementById('btn-theme-toggle');
+
+  function getSystemTheme() {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+
+  function applyTheme(mode) {
+    const effectiveTheme = mode === 'system' ? getSystemTheme() : mode;
+    document.body.classList.remove('light-mode', 'dark-mode');
+    document.body.classList.add(effectiveTheme + '-mode');
+
+    if (themeToggleBtn) {
+      themeToggleBtn.textContent = effectiveTheme === 'dark' ? '☾' : '☼';
+    }
+  }
+
+  const savedMode = localStorage.getItem('monitory_theme') || 'system';
+  applyTheme(savedMode);
+
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', () => {
+      const isDark = document.body.classList.contains('dark-mode') ||
+        (!document.body.classList.contains('light-mode') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const nextMode = isDark ? 'light' : 'dark';
+      localStorage.setItem('monitory_theme', nextMode);
+      applyTheme(nextMode);
+    });
+  }
+
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if ((localStorage.getItem('monitory_theme') || 'system') === 'system') {
+      applyTheme('system');
+    }
+  });
 }
 
 // Authentication
@@ -183,6 +222,14 @@ function setupNavigation() {
     });
   });
 
+  const menuBtn = document.getElementById('menuBtn');
+  if (menuBtn) {
+    menuBtn.addEventListener('click', () => {
+      const sidebar = document.getElementById('sidebar');
+      if (sidebar) sidebar.classList.toggle('open');
+    });
+  }
+
   const btnBack = document.getElementById('btn-back-to-devices');
   if (btnBack) btnBack.addEventListener('click', () => showView('devices'));
 
@@ -194,51 +241,6 @@ function setupNavigation() {
 
   const contactsSearch = document.getElementById('contacts-search-input');
   if (contactsSearch) contactsSearch.addEventListener('input', (e) => filterContacts(e.target.value));
-
-  // Swipe Gesture Navigation for Mobile Main Views
-  const mainContent = document.querySelector('.main-content');
-  if (mainContent) {
-    let touchstartX = 0;
-    let touchstartY = 0;
-    let touchendX = 0;
-    let touchendY = 0;
-
-    mainContent.addEventListener('touchstart', (e) => {
-      touchstartX = e.changedTouches[0].screenX;
-      touchstartY = e.changedTouches[0].screenY;
-    }, { passive: true });
-
-    mainContent.addEventListener('touchend', (e) => {
-      touchendX = e.changedTouches[0].screenX;
-      touchendY = e.changedTouches[0].screenY;
-      
-      const diffX = touchendX - touchstartX;
-      const diffY = touchendY - touchstartY;
-
-      // Ensure horizontal swipe is dominant and significant
-      if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 100) {
-        const views = ['overview', 'devices', 'audit', 'alerts'];
-        // Find current active view name
-        const activeNav = document.querySelector('.sidebar-nav .nav-item.active');
-        const currentView = activeNav ? activeNav.getAttribute('data-view') : 'overview';
-        let currentIndex = views.indexOf(currentView);
-        
-        if (currentIndex !== -1) {
-          if (diffX < 0) {
-            // Swiped Left -> Next View
-            if (currentIndex < views.length - 1) {
-              showView(views[currentIndex + 1]);
-            }
-          } else {
-            // Swiped Right -> Previous View
-            if (currentIndex > 0) {
-              showView(views[currentIndex - 1]);
-            }
-          }
-        }
-      }
-    }, { passive: true });
-  }
 }
 
 function showView(viewName) {
@@ -250,9 +252,16 @@ function showView(viewName) {
   const target = document.getElementById(`view-${viewName}`);
   if (target) target.classList.add('active');
 
-  document.getElementById('page-title').textContent =
-    viewName === 'device-detail' ? 'Device Details' :
-    viewName.charAt(0).toUpperCase() + viewName.slice(1);
+  const crumb = document.getElementById('crumb-current-name');
+  if (crumb) {
+    crumb.textContent =
+      viewName === 'device-detail' ? 'Device Details' :
+      viewName.charAt(0).toUpperCase() + viewName.slice(1);
+  }
+
+  // Close mobile sidebar if open
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar) sidebar.classList.remove('open');
 
   if (viewName === 'devices') loadDevices();
   if (viewName === 'audit') loadAuditLogs();
@@ -352,9 +361,21 @@ function handleWsMessage(msg) {
     }
     pushConsoleTimeline('COMMUNICATION', 'Call Logs Synced', `Received updated call history records`, 'info');
   } else if (msg.type === 'DEVICE_PAIRED') {
+    const liveText = document.getElementById('pair-live-status-text');
+    const pulseDot = document.getElementById('pair-pulse-indicator');
+    if (liveText) {
+      liveText.textContent = `🎉 Device connected: ${msg.deviceName || 'Android Device'}!`;
+      liveText.style.color = '#10b981';
+      liveText.style.fontWeight = '700';
+    }
+    if (pulseDot) {
+      pulseDot.style.background = '#10b981';
+      pulseDot.style.boxShadow = '0 0 10px #10b981';
+    }
+    if (window.loadPairingCodesHistory) window.loadPairingCodesHistory();
     loadDevices();
-    showView('devices');
-    pushConsoleTimeline('SYSTEM', 'New Device Enrolled', `Paired successfully`, 'success');
+    showToast(`Device ${msg.deviceName || 'Android'} paired successfully!`);
+    pushConsoleTimeline('SYSTEM', 'New Device Enrolled', `Paired ${msg.deviceName || 'Device'} (${msg.deviceId || ''})`, 'success');
   }
 }
 
@@ -417,23 +438,51 @@ function renderDevicesGrid(devices) {
 }
 
 function renderOverviewDevicesList(devices) {
-  const container = document.getElementById('overview-devices-list');
+  const tbody = document.getElementById('overview-devices-tbody');
+  const footCount = document.getElementById('foot-count-text');
+  const footFleet = document.getElementById('foot-fleet-text');
+
+  const onlineCount = devices.filter(d => d.status === 'ONLINE').length;
+  if (footCount) footCount.textContent = `${devices.length} device${devices.length === 1 ? '' : 's'} (${onlineCount} online)`;
+  if (footFleet) footFleet.textContent = `Monitory Live Fleet`;
+
+  if (!tbody) return;
+
   if (devices.length === 0) {
-    container.innerHTML = '<div class="empty-state">No devices enrolled yet.</div>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 24px; color: var(--muted);">No devices enrolled yet. Click "Pair Device" to generate a code.</td></tr>';
     return;
   }
 
-  container.innerHTML = devices.slice(0, 5).map(d => `
-    <div class="device-card" style="margin-bottom: 8px;" onclick="openDeviceDetail('${d.id}')">
-      <div class="device-card-header" style="margin-bottom: 0;">
-        <div>
-          <div class="device-card-name">${escapeHtml(d.device_name)}</div>
-          <div class="device-card-meta">${escapeHtml(d.model || '')} • ${d.last_seen ? formatTimeAgo(d.last_seen) : ''}</div>
-        </div>
-        <span class="pill ${d.status === 'ONLINE' ? 'pill-online' : 'pill-offline'}">${d.status}</span>
-      </div>
-    </div>
-  `).join('');
+  tbody.innerHTML = devices.map(d => {
+    const isSamsung = (d.manufacturer || '').toLowerCase().includes('samsung');
+    const isRedmi = (d.manufacturer || '').toLowerCase().includes('xiaomi') || (d.manufacturer || '').toLowerCase().includes('redmi');
+    const phoneClass = isSamsung ? 'samsung' : (isRedmi ? 'redmi' : 'infinix');
+    const phoneLetter = (d.device_name || d.model || 'A').charAt(0).toUpperCase();
+    const isOnline = d.status === 'ONLINE';
+    const statusClass = isOnline ? 'online' : 'offline';
+    const batLevel = d.battery_level !== undefined ? d.battery_level : 0;
+    const lastSeenStr = d.last_seen ? formatTimeAgo(d.last_seen) : 'Never';
+
+    return `
+      <tr onclick="openDeviceDetail('${d.id}')" style="cursor: pointer;">
+        <td>
+          <div class="device">
+            <span class="phone ${phoneClass}">${phoneLetter}</span>
+            <div>
+              <b>${escapeHtml(d.device_name || 'Android Device')}</b>
+              <small>${escapeHtml(d.manufacturer || '')} ${escapeHtml(d.model || '')} · Android ${escapeHtml(d.os_version || '')}</small>
+            </div>
+          </div>
+        </td>
+        <td><span class="status ${statusClass}">● ${d.status || 'OFFLINE'}</span></td>
+        <td>
+          <span class="battery"><i style="width: ${Math.min(100, Math.max(0, batLevel))}%"></i></span> ${batLevel}%
+        </td>
+        <td>${lastSeenStr}</td>
+        <td><button class="more" title="View details" onclick="event.stopPropagation(); openDeviceDetail('${d.id}')">···</button></td>
+      </tr>
+    `;
+  }).join('');
 }
 
 function filterDevices(query) {
@@ -2215,12 +2264,11 @@ async function loadAlerts() {
   } catch (_) {}
 }
 
-// Pairing Modal Logic
+// Pairing Modal & Server Config Logic
 function setupPairingModal() {
   if (btnPairModal) {
     btnPairModal.addEventListener('click', () => {
-      if (pairModal) pairModal.classList.remove('hidden');
-      generatePairingCode();
+      window.openPairModal();
     });
   }
 
@@ -2238,28 +2286,354 @@ function setupPairingModal() {
   }
 }
 
-async function generatePairingCode() {
+window.switchPairModalTab = function(tabKey) {
+  const btnGen = document.getElementById('tab-btn-pair-gen');
+  const btnClaim = document.getElementById('tab-btn-pair-claim');
+  const btnHistory = document.getElementById('tab-btn-pair-history');
+
+  const panelGen = document.getElementById('pair-tab-panel-gen');
+  const panelClaim = document.getElementById('pair-tab-panel-claim');
+  const panelHistory = document.getElementById('pair-tab-panel-history');
+
+  [btnGen, btnClaim, btnHistory].forEach(b => b && b.classList.remove('active'));
+  [panelGen, panelClaim, panelHistory].forEach(p => {
+    if (p) {
+      p.classList.remove('active');
+      p.style.display = 'none';
+    }
+  });
+
+  if (tabKey === 'gen') {
+    if (btnGen) btnGen.classList.add('active');
+    if (panelGen) {
+      panelGen.classList.add('active');
+      panelGen.style.display = 'block';
+    }
+  } else if (tabKey === 'claim') {
+    if (btnClaim) btnClaim.classList.add('active');
+    if (panelClaim) {
+      panelClaim.classList.add('active');
+      panelClaim.style.display = 'block';
+      const input = document.getElementById('claim-device-code');
+      if (input) setTimeout(() => input.focus(), 50);
+    }
+  } else if (tabKey === 'history') {
+    if (btnHistory) btnHistory.classList.add('active');
+    if (panelHistory) {
+      panelHistory.classList.add('active');
+      panelHistory.style.display = 'block';
+    }
+    window.loadPairingCodesHistory();
+  }
+};
+
+window.copyServerUrlToClipboard = function() {
+  const origin = window.location.origin;
+  navigator.clipboard.writeText(origin);
+  showToast(`Server URL copied: ${origin}`);
+};
+
+window.claimDeviceFromDashboard = async function() {
+  const codeInput = document.getElementById('claim-device-code');
+  const nameInput = document.getElementById('claim-device-name');
+  const envSelect = document.getElementById('claim-device-env');
+  const alertEl = document.getElementById('claim-status-alert');
+  const btn = document.getElementById('btn-submit-claim-device');
+
+  const code = (codeInput?.value || '').trim();
+  const deviceName = (nameInput?.value || '').trim() || 'Android Device';
+  const environment = envSelect?.value || 'Production VPS';
+
+  if (!code || code.length < 4) {
+    if (alertEl) {
+      alertEl.style.display = 'block';
+      alertEl.style.background = 'rgba(239, 68, 68, 0.15)';
+      alertEl.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+      alertEl.style.color = '#f87171';
+      alertEl.textContent = 'Please enter a valid pairing code (e.g. 6 digits).';
+    }
+    return;
+  }
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳ Linking device to dashboard...</span>';
+  }
+  if (alertEl) alertEl.style.display = 'none';
+
   try {
-    const res = await fetch('/api/devices/pair-code', {
+    const res = await fetch('/api/pairing/claim', {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({
+        code,
+        deviceName,
+        environment
+      })
+    });
+    const data = await res.json();
+
+    if (res.ok && data.success) {
+      if (alertEl) {
+        alertEl.style.display = 'block';
+        alertEl.style.background = 'rgba(16, 185, 129, 0.15)';
+        alertEl.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+        alertEl.style.color = '#34d399';
+        alertEl.textContent = `✓ ${data.message || 'Device paired successfully!'}`;
+      }
+      if (codeInput) codeInput.value = '';
+      if (nameInput) nameInput.value = '';
+
+      showToast(`Device "${deviceName}" paired and enrolled!`);
+      loadDevices();
+      window.loadPairingCodesHistory();
+
+      setTimeout(() => {
+        document.getElementById('pair-modal')?.classList.add('hidden');
+        showView('devices');
+      }, 1200);
+    } else {
+      if (alertEl) {
+        alertEl.style.display = 'block';
+        alertEl.style.background = 'rgba(239, 68, 68, 0.15)';
+        alertEl.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+        alertEl.style.color = '#f87171';
+        alertEl.textContent = data.message || data.error || 'Failed to claim device with this code.';
+      }
+    }
+  } catch (err) {
+    if (alertEl) {
+      alertEl.style.display = 'block';
+      alertEl.style.background = 'rgba(239, 68, 68, 0.15)';
+      alertEl.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+      alertEl.style.color = '#f87171';
+      alertEl.textContent = `Network error: ${err.message}`;
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>🔗 Pair & Connect Device Now</span>';
+    }
+  }
+};
+
+window.openPairModal = function() {
+  const modal = document.getElementById('pair-modal');
+  if (modal) modal.classList.remove('hidden');
+  window.switchPairModalTab('gen');
+  
+  // Set guide URL to current origin
+  const guideUrlEl = document.getElementById('guide-server-url');
+  if (guideUrlEl) guideUrlEl.textContent = window.location.origin;
+
+  // Reset live pulse status
+  const liveText = document.getElementById('pair-live-status-text');
+  const pulseDot = document.getElementById('pair-pulse-indicator');
+  if (liveText) {
+    liveText.textContent = 'Waiting for Android device to redeem code...';
+    liveText.style.color = 'var(--muted)';
+    liveText.style.fontWeight = '500';
+  }
+  if (pulseDot) {
+    pulseDot.style.background = '#24a477';
+    pulseDot.style.boxShadow = '0 0 8px #24a477';
+  }
+
+  generatePairingCode();
+  window.loadPairingCodesHistory();
+};
+
+window.copyPairingCode = function() {
+  const codeEl = document.getElementById('modal-pairing-code');
+  if (codeEl && codeEl.textContent.trim()) {
+    navigator.clipboard.writeText(codeEl.textContent.trim());
+    showToast('Pairing code copied to clipboard!');
+  }
+};
+
+window.loadPairingCodesHistory = async function() {
+  const tbody = document.getElementById('pairing-codes-tbody');
+  if (!tbody) return;
+  try {
+    const res = await fetch('/api/pairing/codes', {
       headers: { 'Authorization': `Bearer ${authToken}` }
     });
     if (!res.ok) return;
-    const data = await res.json();
-    document.getElementById('modal-pairing-code').textContent = data.code;
+    const codes = await res.json();
+    if (codes.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 12px; color: var(--muted);">No pairing codes generated yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = codes.map(c => {
+      let statusClass = 'pill-online';
+      if (c.status === 'REVOKED' || c.status === 'EXPIRED') statusClass = 'pill-offline';
+      else if (c.status === 'REDEEMED') statusClass = 'pill-online';
+      
+      const canRevoke = c.status === 'ACTIVE';
+      return `
+        <tr style="border-bottom: 1px solid var(--line);">
+          <td style="padding: 6px 10px; font-family: 'JetBrains Mono', monospace; font-weight: 700;">${escapeHtml(c.code)}</td>
+          <td style="padding: 6px 10px; color: var(--muted);">${escapeHtml(c.environment || 'Default')}</td>
+          <td style="padding: 6px 10px;"><span class="pill ${statusClass}" style="font-size: 9px; padding: 2px 6px;">${c.status}</span></td>
+          <td style="padding: 6px 10px; text-align: right;">
+            ${canRevoke ? `<button onclick="window.revokePairingCode('${c.code}')" class="secondary" style="padding: 2px 6px; font-size: 9px; color: #f43f5e; margin: 0;">Revoke</button>` : `<span style="color: var(--muted); font-size: 9px;">--</span>`}
+          </td>
+        </tr>
+      `;
+    }).join('');
+  } catch (e) {
+    console.error('Error loading pairing codes:', e);
+  }
+};
 
-    // Start 10-minute timer countdown
+window.revokePairingCode = async function(code) {
+  try {
+    const res = await fetch(`/api/pairing/codes/${code}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (res.ok) {
+      showToast(`Pairing code ${code} revoked.`);
+      window.loadPairingCodesHistory();
+    }
+  } catch (e) {
+    showToast('Failed to revoke code.');
+  }
+};
+
+window.openServerConfigModal = function() {
+  const modal = document.getElementById('server-config-modal');
+  if (modal) modal.classList.remove('hidden');
+  window.testServerConfig();
+};
+
+window.testServerConfig = async function() {
+  const serverInput = document.getElementById('cfg-input-server-url');
+  const wsInput = document.getElementById('cfg-input-ws-url');
+  const detailsEl = document.getElementById('cfg-health-details');
+  const statusEl = document.getElementById('cfg-server-status');
+
+  const loc = window.location;
+  const proto = loc.protocol;
+  const wsProto = proto === 'https:' ? 'wss:' : 'ws:';
+  const serverUrl = `${proto}//${loc.host}`;
+  const wsUrl = `${wsProto}//${loc.host}/ws/device`;
+
+  if (serverInput) serverInput.value = serverUrl;
+  if (wsInput) wsInput.value = wsUrl;
+
+  try {
+    const res = await fetch('/api/server/config');
+    if (res.ok) {
+      const data = await res.json();
+      if (detailsEl) {
+        detailsEl.innerHTML = `
+          <div>Status: <b style="color: #22c55e;">${data.status}</b></div>
+          <div>Environment: <b>${data.environment}</b></div>
+          <div>Database Engine: <b>${data.postgres ? 'PostgreSQL' : 'Embedded DB'}</b></div>
+          <div>Connected Devices: <b>${data.activeDevices}</b></div>
+        `;
+      }
+      if (statusEl) {
+        statusEl.textContent = 'HEALTHY';
+        statusEl.className = 'pill pill-online';
+      }
+    } else {
+      if (statusEl) {
+        statusEl.textContent = 'ERROR';
+        statusEl.className = 'pill pill-offline';
+      }
+    }
+  } catch (err) {
+    if (detailsEl) detailsEl.textContent = 'Connection test failed: ' + err.message;
+    if (statusEl) {
+      statusEl.textContent = 'UNREACHABLE';
+      statusEl.className = 'pill pill-offline';
+    }
+  }
+};
+
+window.copyServerUrl = function() {
+  const input = document.getElementById('cfg-input-server-url');
+  if (input && input.value) {
+    navigator.clipboard.writeText(input.value);
+    showToast('Server URL copied!');
+  }
+};
+
+window.copyWsUrl = function() {
+  const input = document.getElementById('cfg-input-ws-url');
+  if (input && input.value) {
+    navigator.clipboard.writeText(input.value);
+    showToast('WebSocket URL copied!');
+  }
+};
+
+async function generatePairingCode() {
+  try {
+    const envSelect = document.getElementById('pair-env-select');
+    const selectedEnv = envSelect ? envSelect.value : 'Default VPS';
+    const qrOverlay = document.getElementById('qr-expired-overlay');
+    const qrImg = document.getElementById('pairing-qr-img');
+
+    if (qrOverlay) qrOverlay.style.display = 'none';
+
+    const res = await fetch('/api/pairing/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({ environment: selectedEnv })
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+
+    // Display 6-digit code and QR Code image
+    const codeEl = document.getElementById('modal-pairing-code');
+    if (codeEl) codeEl.textContent = data.code;
+
+    if (qrImg && data.qrDataUrl) {
+      qrImg.src = data.qrDataUrl;
+    }
+
+    // Refresh history
+    window.loadPairingCodesHistory();
+
+    // Reset live pulse status
+    const liveText = document.getElementById('pair-live-status-text');
+    const pulseDot = document.getElementById('pair-pulse-indicator');
+    if (liveText) {
+      liveText.textContent = 'Scan QR code or enter 6-digit code on Android device';
+      liveText.style.color = 'var(--muted)';
+      liveText.style.fontWeight = '500';
+    }
+    if (pulseDot) {
+      pulseDot.style.background = '#24a477';
+      pulseDot.style.boxShadow = '0 0 8px #24a477';
+    }
+
+    // Start 30-second timer countdown
     const expires = new Date(data.expiresAt).getTime();
     clearInterval(pairingTimer);
     pairingTimer = setInterval(() => {
       const now = Date.now();
       const diff = Math.max(0, Math.floor((expires - now) / 1000));
-      const m = Math.floor(diff / 60);
-      const s = diff % 60;
-      document.getElementById('code-countdown').textContent = `${m}:${s < 10 ? '0' : ''}${s}`;
+      const countdownEl = document.getElementById('code-countdown');
+      if (countdownEl) countdownEl.textContent = `${diff}s`;
+
       if (diff <= 0) {
         clearInterval(pairingTimer);
-        document.getElementById('modal-pairing-code').textContent = 'EXPIRED';
+        if (codeEl) codeEl.textContent = 'EXPIRED';
+        if (qrOverlay) qrOverlay.style.display = 'flex';
+        if (liveText) {
+          liveText.textContent = '⚠️ Pairing session expired. Click "New Session" to refresh.';
+          liveText.style.color = '#f87171';
+        }
+        window.loadPairingCodesHistory();
       }
     }, 1000);
   } catch (err) {

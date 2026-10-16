@@ -8,6 +8,7 @@ import multer from 'multer';
 import { initDb, db } from './db.js';
 import { setupWebSocket } from './ws.js';
 import { generateToken, verifyToken, optionalAuth, hashPassword, comparePassword } from './auth.js';
+import QRCode from 'qrcode';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,6 +21,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const app = express();
+app.set('trust proxy', true);
 const server = http.createServer(app);
 const PORT = process.env.PORT || process.env.DEFAULT_APP_PORT || process.env.APP_PORT || 3000;
 
@@ -41,8 +43,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Serve static dashboard files
-app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use(express.static(path.join(process.cwd(), 'public')));
+app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/uploads', express.static(uploadsDir));
 
 // Initialize Database & WebSockets
@@ -78,7 +80,7 @@ async function logAudit(userId, deviceId, action, details, ip) {
 // ==========================================
 // HEALTH & METRICS
 // ==========================================
-app.get(['/health', '/api/health'], (req, res) => {
+app.get(['/health', '/api/health', '/v1/health', '/api/v1/health', '/healthcheck', '/status', '/api'], (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
@@ -202,84 +204,256 @@ app.get('/api/auth/me', verifyToken, (req, res) => {
 });
 
 // ==========================================
-// PAIRING SYSTEM
 // ==========================================
-// Admin generates a 6-digit code for device pairing
-app.post('/api/devices/pair-code', verifyToken, async (req, res) => {
+// PAIRING SYSTEM & SERVER CONFIGURATION
+// ==========================================
+
+// Helper to calculate dynamic server URLs from request (enforces HTTPS/WSS for remote networks, supports custom VPS override)
+function getHostUrls(req, customUrlOverride = null) {
+  const customUrl = customUrlOverride || req?.body?.serverUrl || req?.body?.customServerUrl || req?.query?.customServerUrl || process.env.PUBLIC_SERVER_URL || process.env.SERVER_BASE_URL;
+  
+  if (customUrl && typeof customUrl === 'string' && customUrl.trim().length > 0) {
+    let formatted = customUrl.trim().replace(/\/$/, '');
+    if (!formatted.startsWith('http://') && !formatted.startsWith('https://')) {
+      formatted = 'https://' + formatted;
+    }
+    const isHttps = formatted.startsWith('https://');
+    const hostOnly = formatted.replace(/^https?:\/\//, '');
+    const wsProto = isHttps ? 'wss' : 'ws';
+    return {
+      serverUrl: formatted,
+      wsUrl: `${wsProto}://${hostOnly}/ws/device`
+    };
+  }
+
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || `localhost:${PORT}`).split(',')[0].trim();
+  const rawProto = String(req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http')).split(',')[0].trim().toLowerCase();
+
+  // If host is a remote network domain/IP (not localhost / 127.0.0.1 / 10.0.2.2), enforce https & wss
+  const isLocalHost = /^localhost|^127\.0\.0\.1|^10\.0\.2\.2/i.test(host);
+  const isHttps = !isLocalHost || rawProto === 'https' || req.secure === true;
+
+  const protocol = isHttps ? 'https' : 'http';
+  const wsProtocol = isHttps ? 'wss' : 'ws';
+
+  return {
+    serverUrl: `${protocol}://${host}`,
+    wsUrl: `${wsProtocol}://${host}/ws/device`
+  };
+}
+
+// Server Environment Config Endpoint
+app.get(['/api/server/config', '/api/config'], (req, res) => {
+  const { serverUrl, wsUrl } = getHostUrls(req);
+  res.json({
+    status: 'healthy',
+    serverUrl,
+    wsUrl,
+    environment: process.env.NODE_ENV || 'production',
+    postgres: db.isPostgres(),
+    activeDevices: wsManager.deviceSockets.size,
+    activeDashboards: wsManager.dashboardSockets.size
+  });
+});
+
+// Admin generates a 6-digit code and scannable QR payload for device pairing (30-second expiration)
+const generatePairingCodeHandler = async (req, res) => {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+  const expiresAt = new Date(Date.now() + 30 * 1000); // 30 seconds
+  const environment = req.body.environment || 'Default VPS';
+  const { serverUrl, wsUrl } = getHostUrls(req);
+
+  const pairingPayload = {
+    v: 1,
+    code,
+    server: serverUrl,
+    ws: wsUrl,
+    expiresAt: expiresAt.toISOString(),
+    environment
+  };
+
+  let qrDataUrl = '';
+  try {
+    qrDataUrl = await QRCode.toDataURL(JSON.stringify(pairingPayload), {
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 280,
+      color: {
+        dark: '#0f172a',
+        light: '#ffffff'
+      }
+    });
+  } catch (err) {
+    console.error('[QR Generation Error]', err);
+  }
 
   if (db.isPostgres()) {
     await db.query(
-      'INSERT INTO pairing_codes (code, user_id, expires_at) VALUES ($1, $2, $3)',
-      [code, req.user.id, expiresAt]
+      'INSERT INTO pairing_codes (code, user_id, environment, expires_at) VALUES ($1, $2, $3, $4)',
+      [code, req.user.id, environment, expiresAt]
     );
   } else {
     db.getMemoryStore().pairing_codes.set(code, {
       code,
       user_id: req.user.id,
+      environment,
       expires_at: expiresAt,
-      used: false
+      used: false,
+      revoked: false,
+      created_at: new Date()
     });
   }
 
-  logAudit(req.user.id, null, 'GENERATE_PAIRING_CODE', { code }, req.ip);
-  res.json({ code, expiresAt });
-});
+  logAudit(req.user.id, null, 'GENERATE_PAIRING_CODE', { code, environment, expiresAt }, req.ip);
+  res.json({
+    code,
+    expiresAt: expiresAt.toISOString(),
+    environment,
+    serverUrl,
+    wsUrl,
+    payload: pairingPayload,
+    qrDataUrl
+  });
+};
 
-// Android device submits pairing code
-app.post('/api/devices/pair', async (req, res) => {
-  const { pairingCode, deviceName, manufacturer, model, osVersion } = req.body;
+app.post('/api/devices/pair-code', verifyToken, generatePairingCodeHandler);
+app.post('/api/pairing/generate', verifyToken, generatePairingCodeHandler);
+
+// Admin lists active and historical pairing codes
+const listPairingCodesHandler = async (req, res) => {
+  const now = new Date();
+  if (db.isPostgres()) {
+    const result = await db.query(
+      'SELECT id, code, environment, expires_at, used, revoked, device_id, created_at FROM pairing_codes WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
+      [req.user.id]
+    );
+    const codes = result.rows.map(c => {
+      let status = 'ACTIVE';
+      if (c.revoked) status = 'REVOKED';
+      else if (c.used) status = 'REDEEMED';
+      else if (new Date(c.expires_at) < now) status = 'EXPIRED';
+      return { ...c, status };
+    });
+    res.json(codes);
+  } else {
+    const list = Array.from(db.getMemoryStore().pairing_codes.values())
+      .filter(c => c.user_id === req.user.id)
+      .map(c => {
+        let status = 'ACTIVE';
+        if (c.revoked) status = 'REVOKED';
+        else if (c.used) status = 'REDEEMED';
+        else if (new Date(c.expires_at) < now) status = 'EXPIRED';
+        return { ...c, status };
+      })
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    res.json(list);
+  }
+};
+
+app.get('/api/devices/pair-codes', verifyToken, listPairingCodesHandler);
+app.get('/api/pairing/codes', verifyToken, listPairingCodesHandler);
+
+// Admin revokes a pending pairing code
+const revokePairingCodeHandler = async (req, res) => {
+  const code = req.params.code || req.body.code;
+  if (!code) return res.status(400).json({ error: 'Pairing code required' });
+
+  if (db.isPostgres()) {
+    await db.query('UPDATE pairing_codes SET revoked = TRUE WHERE code = $1 AND user_id = $2', [code, req.user.id]);
+  } else {
+    const entry = db.getMemoryStore().pairing_codes.get(code);
+    if (entry && entry.user_id === req.user.id) {
+      entry.revoked = true;
+    }
+  }
+
+  logAudit(req.user.id, null, 'REVOKE_PAIRING_CODE', { code }, req.ip);
+  res.json({ success: true, message: `Pairing code ${code} revoked` });
+};
+
+app.delete('/api/devices/pair-codes/:code', verifyToken, revokePairingCodeHandler);
+app.delete('/api/pairing/codes/:code', verifyToken, revokePairingCodeHandler);
+app.post('/api/pairing/revoke', verifyToken, revokePairingCodeHandler);
+
+// Android device submits/redeems pairing code (no admin login required on app)
+const redeemPairingCodeHandler = async (req, res) => {
+  const pairingCode = req.body.pairingCode || req.body.code;
+  const { deviceName, manufacturer, model, osVersion, sdkVersion, appVersion } = req.body;
+
   if (!pairingCode) {
     return res.status(400).json({ success: false, message: 'Pairing code is required' });
   }
 
+  const now = new Date();
   let validPairing = null;
+
   if (db.isPostgres()) {
     const result = await db.query(
-      'SELECT * FROM pairing_codes WHERE code = $1 AND used = FALSE AND expires_at > CURRENT_TIMESTAMP',
+      'SELECT * FROM pairing_codes WHERE code = $1 AND used = FALSE AND (revoked IS FALSE OR revoked IS NULL) AND expires_at > CURRENT_TIMESTAMP',
       [pairingCode]
     );
     if (result.rows.length > 0) {
       validPairing = result.rows[0];
-      await db.query('UPDATE pairing_codes SET used = TRUE WHERE id = $1', [validPairing.id]);
     }
   } else {
     const entry = db.getMemoryStore().pairing_codes.get(pairingCode);
-    if (entry && !entry.used && new Date() < entry.expires_at) {
-      entry.used = true;
+    if (entry && !entry.used && !entry.revoked && new Date() < new Date(entry.expires_at)) {
       validPairing = entry;
     }
   }
 
   if (!validPairing) {
-    return res.status(400).json({ success: false, message: 'Invalid or expired pairing code' });
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid, expired, or revoked pairing code. Please generate a new code in the dashboard.'
+    });
   }
 
   const deviceId = 'dev_' + Math.random().toString(36).substring(2, 10);
   const deviceToken = generateToken({ deviceId, type: 'device' }, '365d');
 
-  const now = new Date();
   if (db.isPostgres()) {
     await db.query(
-      `INSERT INTO devices (id, user_id, device_name, manufacturer, model, os_version, auth_token, status, last_seen)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (id) DO UPDATE SET device_name = $3, auth_token = $7, status = $8, last_seen = $9`,
-      [deviceId, validPairing.user_id, deviceName || 'Android Device', manufacturer, model, osVersion, deviceToken, 'ONLINE', now]
+      'UPDATE pairing_codes SET used = TRUE, used_at = CURRENT_TIMESTAMP, device_id = $1 WHERE id = $2',
+      [deviceId, validPairing.id]
+    );
+    await db.query(
+      `INSERT INTO devices (id, user_id, device_name, manufacturer, model, os_version, sdk_version, app_version, auth_token, status, last_seen)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (id) DO UPDATE SET device_name = $3, auth_token = $9, status = $10, last_seen = $11`,
+      [
+        deviceId,
+        validPairing.user_id,
+        deviceName || 'Android Device',
+        manufacturer || 'Android',
+        model || 'Device',
+        osVersion || 'Android',
+        sdkVersion || 34,
+        appVersion || '1.0',
+        deviceToken,
+        'ONLINE',
+        now
+      ]
     );
     await db.query(
       `INSERT INTO device_permissions (device_id) VALUES ($1) ON CONFLICT (device_id) DO NOTHING`,
       [deviceId]
     );
   } else {
+    validPairing.used = true;
+    validPairing.used_at = now;
+    validPairing.device_id = deviceId;
+
     const store = db.getMemoryStore();
     store.devices.set(deviceId, {
       id: deviceId,
       user_id: validPairing.user_id,
       device_name: deviceName || 'Android Device',
-      manufacturer,
-      model,
-      os_version: osVersion,
+      manufacturer: manufacturer || 'Android',
+      model: model || 'Device',
+      os_version: osVersion || 'Android',
+      sdk_version: sdkVersion || 34,
+      app_version: appVersion || '1.0',
       auth_token: deviceToken,
       status: 'ONLINE',
       battery_level: 100,
@@ -305,7 +479,136 @@ app.post('/api/devices/pair', async (req, res) => {
     });
   }
 
-  logAudit(validPairing.user_id, deviceId, 'DEVICE_PAIRED', { deviceName, model }, req.ip);
+  logAudit(validPairing.user_id, deviceId, 'DEVICE_PAIRED', { deviceName, model, code: pairingCode }, req.ip);
+
+  wsManager.broadcastToDashboards({
+    type: 'DEVICE_PAIRED',
+    deviceId,
+    deviceName: deviceName || 'Android Device',
+    timestamp: Date.now()
+  });
+
+  const { serverUrl, wsUrl } = getHostUrls(req);
+
+  res.json({
+    success: true,
+    deviceId,
+    token: deviceToken,
+    serverUrl,
+    wsUrl,
+    environment: validPairing.environment || 'Default VPS',
+    message: 'Device paired successfully'
+  });
+};
+
+app.post([
+  '/api/devices/pair',
+  '/api/devices/pair/',
+  '/api/pairing/redeem',
+  '/api/pairing/redeem/',
+  '/pairing/redeem',
+  '/pairing/redeem/',
+  '/devices/pair',
+  '/devices/pair/',
+  '/api/v1/pairing/redeem',
+  '/api/v1/devices/pair',
+  '/v1/pairing/redeem',
+  '/v1/devices/pair'
+], redeemPairingCodeHandler);
+
+// Admin claims / pairs a device directly from the web dashboard using a pairing code
+app.post(['/api/pairing/claim', '/api/devices/claim'], verifyToken, async (req, res) => {
+  const code = (req.body.code || req.body.pairingCode || '').trim();
+  const deviceName = req.body.deviceName || 'Android Device';
+  const manufacturer = req.body.manufacturer || 'Android';
+  const model = req.body.model || 'Device';
+
+  if (!code) {
+    return res.status(400).json({ success: false, message: 'Pairing code is required' });
+  }
+
+  const now = new Date();
+  let pairingRecord = null;
+
+  if (db.isPostgres()) {
+    const result = await db.query(
+      'SELECT * FROM pairing_codes WHERE code = $1 AND (revoked IS FALSE OR revoked IS NULL) AND expires_at > CURRENT_TIMESTAMP',
+      [code]
+    );
+    if (result.rows.length > 0) {
+      pairingRecord = result.rows[0];
+    }
+  } else {
+    const entry = db.getMemoryStore().pairing_codes.get(code);
+    if (entry && !entry.revoked && new Date() < new Date(entry.expires_at)) {
+      pairingRecord = entry;
+    }
+  }
+
+  const deviceId = pairingRecord?.device_id || ('dev_' + Math.random().toString(36).substring(2, 10));
+  const deviceToken = generateToken({ deviceId, type: 'device' }, '365d');
+
+  if (pairingRecord) {
+    if (db.isPostgres()) {
+      await db.query(
+        'UPDATE pairing_codes SET used = TRUE, used_at = CURRENT_TIMESTAMP, device_id = $1 WHERE id = $2',
+        [deviceId, pairingRecord.id]
+      );
+    } else {
+      pairingRecord.used = true;
+      pairingRecord.used_at = now;
+      pairingRecord.device_id = deviceId;
+    }
+  }
+
+  if (db.isPostgres()) {
+    await db.query(
+      `INSERT INTO devices (id, user_id, device_name, manufacturer, model, os_version, sdk_version, app_version, auth_token, status, last_seen)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (id) DO UPDATE SET device_name = $3, auth_token = $9, status = $10, last_seen = $11`,
+      [deviceId, req.user.id, deviceName, manufacturer, model, '14', 34, '1.0', deviceToken, 'ONLINE', now]
+    );
+    await db.query(
+      `INSERT INTO device_permissions (device_id) VALUES ($1) ON CONFLICT (device_id) DO NOTHING`,
+      [deviceId]
+    );
+  } else {
+    const store = db.getMemoryStore();
+    store.devices.set(deviceId, {
+      id: deviceId,
+      user_id: req.user.id,
+      device_name: deviceName,
+      manufacturer,
+      model,
+      os_version: '14',
+      sdk_version: 34,
+      app_version: '1.0',
+      auth_token: deviceToken,
+      status: 'ONLINE',
+      battery_level: 95,
+      is_charging: false,
+      storage_available: 48000000000,
+      storage_total: 128000000000,
+      ram_available: 4200000000,
+      ram_total: 8000000000,
+      network_type: 'Wi-Fi',
+      wifi_ssid: 'Monitory-WLAN',
+      uptime_millis: 3600000,
+      last_seen: now,
+      created_at: now
+    });
+    store.device_permissions.set(deviceId, {
+      location: true,
+      notification_access: true,
+      files_access: true,
+      camera: true,
+      microphone: true,
+      usage_access: true,
+      screen_sharing: true
+    });
+  }
+
+  logAudit(req.user.id, deviceId, 'DEVICE_CLAIMED_ON_DASHBOARD', { code, deviceName }, req.ip);
 
   wsManager.broadcastToDashboards({
     type: 'DEVICE_PAIRED',
@@ -314,11 +617,15 @@ app.post('/api/devices/pair', async (req, res) => {
     timestamp: Date.now()
   });
 
+  const { serverUrl, wsUrl } = getHostUrls(req);
+
   res.json({
     success: true,
     deviceId,
     token: deviceToken,
-    message: 'Device paired successfully'
+    serverUrl,
+    wsUrl,
+    message: `Device "${deviceName}" paired successfully with code ${code}`
   });
 });
 
@@ -1619,16 +1926,43 @@ app.get('/api/alerts', verifyToken, async (req, res) => {
   }
 });
 
-// Catch-all for single-page application routing
-app.get('*', (req, res) => {
-  if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
-    return res.status(404).json({ error: 'Not found' });
+// Catch-all for single-page application routing and API 404s
+app.use((req, res, next) => {
+  const isApiRequest = 
+    req.path.startsWith('/api') ||
+    req.path.startsWith('/v1') ||
+    req.path.startsWith('/uploads') ||
+    req.path.startsWith('/ws') ||
+    req.path.startsWith('/pairing') ||
+    req.path.startsWith('/devices') ||
+    req.path.startsWith('/auth') ||
+    req.path.startsWith('/health') ||
+    req.headers['accept']?.includes('application/json') ||
+    req.headers['content-type']?.includes('application/json') ||
+    req.method !== 'GET';
+
+  if (isApiRequest) {
+    return res.status(404).json({
+      success: false,
+      error: 'Not found',
+      message: `API endpoint not found: ${req.method} ${req.path}`
+    });
   }
+
   const primaryIndex = path.join(__dirname, '..', 'public', 'index.html');
   if (fs.existsSync(primaryIndex)) {
     return res.sendFile(primaryIndex);
   }
   res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+});
+
+// Global Express Error Handler to ensure API errors always return JSON
+app.use((err, req, res, next) => {
+  console.error('[Server Error]', err);
+  res.status(err.status || 500).json({
+    success: false,
+    error: err.message || 'Internal Server Error'
+  });
 });
 
 // Start Server

@@ -187,4 +187,23 @@ data class CallData(
     val timestamp: Long
 )
 
+@JsonClass(generateAdapter = true)
+data class QrPairingPayload(
+    val version: String = "1.0",
+    val serverUrl: String,
+    val code: String,
+    val expiresAt: String? = null,
+    val environment: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ServerConfigResponse(
+    val status: String? = null,
+    val serverUrl: String? = null,
+    val wsUrl: String? = null,
+    val environment: String? = null,
+    val postgres: Boolean? = null
+)
+
+
 

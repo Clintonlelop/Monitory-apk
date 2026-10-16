@@ -232,7 +232,30 @@ class DeviceRepository(
 
     suspend fun pairDevice(serverUrl: String, pairingCode: String): Result<String> = withContext(Dispatchers.IO) {
         try {
-            preferenceManager.setServerUrl(serverUrl)
+            var formattedUrl = serverUrl.trim().removeSuffix("/")
+            if (formattedUrl.isBlank()) {
+                return@withContext Result.failure(Exception("Server URL cannot be empty"))
+            }
+            if (!formattedUrl.startsWith("http://") && !formattedUrl.startsWith("https://")) {
+                formattedUrl = "https://$formattedUrl"
+            }
+
+            preferenceManager.setServerUrl(formattedUrl)
+            val service = apiClient.getService()
+
+            // Optional server discovery check
+            try {
+                val configRes = service.getServerConfig()
+                if (configRes.isSuccessful && configRes.body()?.serverUrl != null) {
+                    val canonical = configRes.body()?.serverUrl!!
+                    if (canonical.isNotBlank() && canonical.startsWith("http")) {
+                        preferenceManager.setServerUrl(canonical)
+                    }
+                }
+            } catch (healthEx: Exception) {
+                Log.w("DeviceRepository", "Discovery note: ${healthEx.message}")
+            }
+
             val request = PairingRequest(
                 pairingCode = pairingCode.trim(),
                 deviceName = preferenceManager.getDeviceName(),
@@ -241,13 +264,16 @@ class DeviceRepository(
                 osVersion = Build.VERSION.RELEASE
             )
 
-            val service = apiClient.getService()
-            val response = service.pairDevice(request)
+            val activeService = apiClient.getService()
+            val response = activeService.pairDevice(request)
 
             if (response.isSuccessful && response.body()?.success == true) {
                 val body = response.body()!!
                 preferenceManager.setAuthToken(body.token)
-                body.deviceId?.let { preferenceManager.setPaired(true) }
+                body.deviceId?.let { 
+                    preferenceManager.setDeviceId(it)
+                    preferenceManager.setPaired(true)
+                }
                 preferenceManager.setPaired(true)
 
                 // Start Foreground Service & WebSocket
@@ -260,11 +286,13 @@ class DeviceRepository(
 
                 Result.success("Device paired successfully!")
             } else {
-                val errorMsg = response.body()?.message ?: "Pairing failed (${response.code()})"
+                val errorMsg = response.body()?.message ?: parseErrorBody(response)
                 Result.failure(Exception(errorMsg))
             }
+        } catch (sslEx: javax.net.ssl.SSLException) {
+            Result.failure(Exception("The secure TLS/SSL connection failed. The server certificate may be invalid, expired, or issued for a different hostname."))
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception(e.message ?: "Pairing request failed"))
         }
     }
 

@@ -184,10 +184,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun parseAndPairWithPayload(payloadStr: String) {
+        val raw = payloadStr.trim()
+        if (raw.isBlank()) {
+            _uiState.value = UiState.Error("Pairing payload or code cannot be empty")
+            return
+        }
+
+        if (raw.startsWith("{")) {
+            try {
+                val json = org.json.JSONObject(raw)
+                val targetServerUrl = json.optString("serverUrl")
+                val code = json.optString("code")
+                val expiresAt = json.optString("expiresAt")
+
+                if (!expiresAt.isNullOrBlank()) {
+                    try {
+                        val expiryTime = java.time.Instant.parse(expiresAt).toEpochMilli()
+                        if (System.currentTimeMillis() > expiryTime) {
+                            _uiState.value = UiState.Error("This pairing QR code has expired. Please generate a new code in the dashboard.")
+                            return
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                if (targetServerUrl.isNotBlank()) {
+                    setServerUrl(targetServerUrl)
+                }
+                if (code.isNotBlank()) {
+                    setPairingCode(code)
+                }
+            } catch (e: Exception) {
+                _uiState.value = UiState.Error("Invalid QR Code payload format")
+                return
+            }
+        } else {
+            setPairingCode(raw)
+        }
+
+        pairDevice()
+    }
+
     fun pairDevice() {
         val code = pairingCode.value.trim()
         if (code.isBlank()) {
-            _uiState.value = UiState.Error("Please enter a 6-digit pairing code from the dashboard")
+            _uiState.value = UiState.Error("Please enter a 6-digit pairing code or scan a QR payload")
             return
         }
 

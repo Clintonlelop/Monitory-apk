@@ -20,9 +20,6 @@ class PreferenceManager(context: Context) {
 
     fun getServerUrl(): String {
         val saved = prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
-        if (saved.contains("10.0.2.2") || saved.contains("localhost") || saved.contains("etjoqfdf2ox4fsj5y37jnh")) {
-            return DEFAULT_SERVER_URL
-        }
         var formatted = saved.trim().removeSuffix("/")
         if (!formatted.startsWith("http://") && !formatted.startsWith("https://")) {
             formatted = if (formatted.matches(Regex("^[0-9.]+(?::[0-9]+)?.*$"))) {

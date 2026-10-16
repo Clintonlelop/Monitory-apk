@@ -30,6 +30,12 @@ import retrofit2.http.Query
 
 interface ApiService {
 
+    @GET("/api/server/config")
+    suspend fun getServerConfig(): Response<com.example.data.model.ServerConfigResponse>
+
+    @GET("/health")
+    suspend fun getHealth(): Response<com.example.data.model.ServerConfigResponse>
+
     @POST("/api/auth/register")
     suspend fun registerUser(
         @Body request: AuthRequest
