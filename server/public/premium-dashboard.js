@@ -242,7 +242,7 @@
   function onWsEvent(event) {
     const msg=event.detail||event;
     const type=msg.type||'DEVICE_EVENT', id=msg.deviceId||msg.device_id;
-    const title=({DEVICE_STATUS_CHANGED:'Device status changed',DEVICE_TELEMETRY_UPDATED:'Device telemetry updated',DEVICE_LOCATION_UPDATED:'Location update received',COMMAND_STATUS_CHANGED:'Command status updated',NEW_NOTIFICATION:'Notification received',RECORDING_UPLOADED:'Recording uploaded',DEVICE_CONNECTED:'Device connected',DEVICE_DISCONNECTED:'Device disconnected'})[type]||type.replace(/_/g,' ').toLowerCase().replace(/^./c=>c.toUpperCase());
+    const title=({DEVICE_STATUS_CHANGED:'Device status changed',DEVICE_TELEMETRY_UPDATED:'Device telemetry updated',DEVICE_LOCATION_UPDATED:'Location update received',COMMAND_STATUS_CHANGED:'Command status updated',NEW_NOTIFICATION:'Notification received',RECORDING_UPLOADED:'Recording uploaded',DEVICE_CONNECTED:'Device connected',DEVICE_DISCONNECTED:'Device disconnected'})[type]||type.replace(/_/g,' ').toLowerCase().replace(/^./, c => c.toUpperCase());
     const detail=msg.status?'Status: '+msg.status:msg.commandType||msg.command_type||msg.description||'Event received from the dashboard stream';
     addEvent(type,title,detail,id);
     if(type==='DEVICE_STATUS_CHANGED'||type==='DEVICE_TELEMETRY_UPDATED')loadDevices();
