@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import com.example.data.local.entity.CommandEntity
+import com.example.data.local.entity.KeystrokeEntity
 import com.example.data.local.entity.OfflineEventEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -49,4 +50,22 @@ interface CommandDao {
         errorMessage: String?,
         completionTimestamp: Long?
     )
+}
+
+@Dao
+interface KeystrokeDao {
+    @Insert
+    suspend fun insert(entry: KeystrokeEntity): Long
+
+    @Query("SELECT * FROM keystroke_log ORDER BY timestamp DESC LIMIT :limit")
+    suspend fun getRecent(limit: Int = 500): List<KeystrokeEntity>
+
+    @Query("DELETE FROM keystroke_log WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
+    @Query("SELECT COUNT(*) FROM keystroke_log")
+    suspend fun count(): Int
+
+    @Query("DELETE FROM keystroke_log WHERE id NOT IN (SELECT id FROM keystroke_log ORDER BY timestamp DESC LIMIT :keep)")
+    suspend fun trimTo(keep: Int)
 }

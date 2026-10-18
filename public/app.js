@@ -354,8 +354,24 @@ function handleWsMessage(msg) {
   } else if (msg.type === 'COMMAND_STATUS_UPDATED') {
     if (currentDevice && currentDevice.id === msg.deviceId) {
       loadDeviceCommands(currentDevice.id);
+      if (msg.status === 'COMPLETED' || msg.status === 'FAILED' || msg.status === 'REJECTED') {
+        loadDeviceScreenshots(currentDevice.id);
+        loadDeviceVideos(currentDevice.id);
+        loadDeviceRecordings(currentDevice.id);
+        if (msg.status === 'COMPLETED') {
+          showToast(`Command completed: ${escapeHtml(msg.result || 'done')}`, 'success');
+        } else {
+          showToast(`Command ${String(msg.status).toLowerCase()}: ${escapeHtml(msg.errorMessage || 'no details')}`, 'error');
+        }
+      }
     }
-    pushConsoleTimeline('COMMANDS', 'Execution Sync Acknowledged', `Command: ${msg.commandType || 'SYNC'} • Status: ${msg.status || 'QUEUED'}`, msg.status === 'COMPLETED' ? 'success' : (msg.status === 'FAILED' ? 'error' : 'warning'));
+    pushConsoleTimeline('COMMANDS', 'Execution Status Update', `Command: ${msg.commandId || 'sync'} • ${msg.status || 'QUEUED'}${msg.result ? ' • ' + msg.result : ''}`, msg.status === 'COMPLETED' ? 'success' : ((msg.status === 'FAILED' || msg.status === 'REJECTED') ? 'error' : 'warning'));
+  } else if (msg.type === 'SCREENSHOT_UPLOADED' || msg.type === 'DEVICE_RECORDING_UPLOADED') {
+    if (currentDevice && currentDevice.id === msg.deviceId) {
+      if (msg.type === 'SCREENSHOT_UPLOADED') loadDeviceScreenshots(currentDevice.id);
+      else loadDeviceVideos(currentDevice.id);
+    }
+    pushConsoleTimeline('MEDIA', msg.type === 'SCREENSHOT_UPLOADED' ? 'Screenshot Uploaded' : 'Screen Recording Uploaded', 'Authenticated media is ready for preview', 'success');
   } else if (msg.type === 'GEOFENCE_ALERT') {
     pushConsoleTimeline('LOCATION', `GEOFENCE ${msg.eventType}: ${msg.geofenceName || 'Boundary'}`, `Device ${msg.eventType?.toLowerCase() || 'entered'} perimeter`, msg.eventType === 'ENTERED' ? 'success' : 'warning');
     appendNotificationFeed({
@@ -609,6 +625,8 @@ window.openDeviceDetail = async function(deviceId) {
     loadDeviceUsage(deviceId);
     loadDeviceCommands(deviceId);
     loadDeviceRecordings(deviceId);
+    loadDeviceScreenshots(deviceId);
+    loadDeviceVideos(deviceId);
     loadDeviceSMS(deviceId);
     loadDeviceCalls(deviceId);
     loadDeviceContacts(deviceId);
@@ -1493,6 +1511,94 @@ async function loadDeviceUsage(deviceId) {
 }
 
 // Command Center
+// Canonical command contract: data-cmd carries the exact server commandType
+// (docs/COMMAND_CONTRACT.md). Interactive commands collect validated
+// parameters here before dispatch.
+const COMMAND_LABELS = {
+  TAKE_SCREENSHOT: 'Screenshot',
+  TAKE_PHOTO: 'Photo',
+  RECORD_AUDIO: 'Audio clip',
+  START_RECORDING: 'Screen recording start',
+  STOP_RECORDING: 'Screen recording stop',
+  RECORDING_STATUS: 'Recording status',
+  RING_ALARM: 'Alarm',
+  VIBRATE: 'Vibrate',
+  SEND_NOTIFICATION: 'Notification',
+  LOCK_DEVICE: 'Screen lock',
+  WIPE_DEVICE: 'Agent data wipe',
+  LAUNCH_APP: 'App launch',
+  UNINSTALL_APP: 'App uninstall',
+  UPLOAD_FILE: 'File upload',
+  SYNC_DEVICE: 'Device sync',
+  REQUEST_LOCATION: 'Location',
+  REQUEST_APPS: 'App inventory',
+  REQUEST_USAGE: 'Usage stats',
+  SYNC_FILES: 'File sync',
+  REFRESH_TELEMETRY: 'Telemetry',
+  REFRESH_PERMISSIONS: 'Permission audit',
+  SYNC_NOTIFICATIONS: 'Notification sync',
+  SYNC_CONTACTS: 'Contact sync',
+  SYNC_APPLICATIONS: 'App sync',
+  SYNC_USAGE: 'Usage sync',
+  SYNC_SMS: 'SMS sync',
+  SYNC_CALLS: 'Call log sync',
+  SYNC_KEYSTROKES: 'Text log sync'
+};
+
+function commandLabel(type) {
+  return COMMAND_LABELS[type] || type;
+}
+
+// Build validated parameters for interactive commands. Returns
+// { parameters } or { error } or { cancelled: true }.
+function buildCommandParameters(commandType) {
+  if (commandType === 'SEND_NOTIFICATION') {
+    const msg = prompt('Enter alert message to display on the Android device:');
+    if (msg === null) return { cancelled: true };
+    const trimmed = msg.trim();
+    if (!trimmed) return { error: 'Alert message cannot be empty' };
+    if (trimmed.length > 500) return { error: 'Alert message is too long (max 500 characters)' };
+    return { parameters: { title: 'Admin Alert', message: trimmed } };
+  }
+  if (commandType === 'RECORD_AUDIO') {
+    const raw = prompt('Recording duration in seconds (1-60):', '10');
+    if (raw === null) return { cancelled: true };
+    const seconds = Number(raw);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60) {
+      return { error: 'Duration must be a whole number between 1 and 60 seconds' };
+    }
+    return { parameters: { durationSeconds: seconds } };
+  }
+  if (commandType === 'RING_ALARM') {
+    const raw = prompt('Alarm duration in seconds (3-30):', '10');
+    if (raw === null) return { cancelled: true };
+    const seconds = Number(raw);
+    if (!Number.isInteger(seconds) || seconds < 3 || seconds > 30) {
+      return { error: 'Alarm duration must be a whole number between 3 and 30 seconds' };
+    }
+    return { parameters: { durationSeconds: seconds } };
+  }
+  if (commandType === 'VIBRATE') {
+    const raw = prompt('Vibration duration in milliseconds (100-2000):', '800');
+    if (raw === null) return { cancelled: true };
+    const ms = Number(raw);
+    if (!Number.isInteger(ms) || ms < 100 || ms > 2000) {
+      return { error: 'Vibration duration must be a whole number between 100 and 2000 ms' };
+    }
+    return { parameters: { durationMs: ms } };
+  }
+  if (commandType === 'WIPE_DEVICE') {
+    const ok = confirm(
+      'WIPE AGENT DATA\n\nThis removes the pairing and clears the Monitory agent\'s local data ' +
+      'on the device (logs, tokens, cached files). It is NOT a factory reset and does not touch ' +
+      'personal photos, apps or accounts.\n\nContinue?'
+    );
+    if (!ok) return { cancelled: true };
+    return { parameters: { confirm: 'WIPE' } };
+  }
+  return { parameters: {} };
+}
+
 function setupCommandButtons() {
   document.querySelectorAll('.cmd-tile, .cmd-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -1502,8 +1608,30 @@ function setupCommandButtons() {
         alert('Please open an active device from Fleet Devices first.');
         return;
       }
-      await dispatchCommand(currentDevice.id, cmdType);
+      const built = buildCommandParameters(cmdType);
+      if (built.cancelled) return;
+      if (built.error) {
+        showToast(built.error, 'error');
+        return;
+      }
+      await dispatchCommand(currentDevice.id, cmdType, built.parameters || {});
     });
+  });
+
+  const btnStartRec = document.getElementById('btn-start-recording');
+  if (btnStartRec) btnStartRec.addEventListener('click', async () => {
+    if (!currentDevice) { showToast('Select a device first', 'warning'); return; }
+    await dispatchCommand(currentDevice.id, 'START_RECORDING', {});
+  });
+  const btnStopRec = document.getElementById('btn-stop-recording');
+  if (btnStopRec) btnStopRec.addEventListener('click', async () => {
+    if (!currentDevice) { showToast('Select a device first', 'warning'); return; }
+    await dispatchCommand(currentDevice.id, 'STOP_RECORDING', {});
+  });
+  const btnRecStatus = document.getElementById('btn-recording-status');
+  if (btnRecStatus) btnRecStatus.addEventListener('click', async () => {
+    if (!currentDevice) { showToast('Select a device first', 'warning'); return; }
+    await dispatchCommand(currentDevice.id, 'RECORDING_STATUS', {});
   });
 
   const btnSync = document.getElementById('btn-cmd-sync');
@@ -1541,12 +1669,6 @@ function setupCommandButtons() {
 }
 
 async function dispatchCommand(deviceId, commandType, parameters = {}) {
-  if (commandType === 'SEND_NOTIFICATION') {
-    const msg = prompt('Enter alert message to display on the Android device:');
-    if (!msg) return;
-    parameters = { title: 'Admin Alert', message: msg };
-  }
-
   try {
     const res = await fetch(`/api/devices/${deviceId}/commands`, {
       method: 'POST',
@@ -1557,18 +1679,51 @@ async function dispatchCommand(deviceId, commandType, parameters = {}) {
       body: JSON.stringify({ commandType, parameters })
     });
     const data = await res.json();
-    if (data.error) {
-      showToast(`Command rejected: ${data.error}`, 'error');
+    if (!res.ok || data.error) {
+      const reason = data.error || `HTTP ${res.status}`;
+      showToast(`${commandLabel(commandType)} rejected: ${reason}`, 'error');
+      pushConsoleTimeline('COMMANDS', 'Command Rejected', `${commandLabel(commandType)} — ${reason}`, 'error');
+    } else if (data.idempotentReplay) {
+      showToast(`${commandLabel(commandType)} already dispatched (idempotent replay)`, 'info');
     } else if (data.dispatchedToOnlineDevice) {
-      showToast(`Command ${commandType} sent to device (status: ${data.status})`, 'success');
+      let extra = '';
+      if (data.requiresConsent === 'screen-capture') {
+        extra = ' — authorize on the device when prompted';
+      } else if (data.requiresConsent === 'camera') {
+        extra = ' — tap the shutter in the camera app on the device';
+      }
+      showToast(`${commandLabel(commandType)} delivered to device${extra}`, 'success');
+      pushConsoleTimeline('COMMANDS', 'Command Delivered', `${commandLabel(commandType)} (${data.commandId})`, 'info');
     } else {
-      showToast(`Device offline — command ${commandType} queued and will be delivered on reconnect`, 'warning');
+      showToast(`Device offline — ${commandLabel(commandType)} queued (expires ${new Date(data.expiresAt).toLocaleTimeString()})`, 'warning');
+      pushConsoleTimeline('COMMANDS', 'Command Queued', `${commandLabel(commandType)} will deliver on reconnect`, 'warning');
     }
     loadDeviceCommands(deviceId);
+    return data;
   } catch (err) {
     showToast('Error dispatching command: ' + err.message, 'error');
+    return null;
   }
 }
+
+window.cancelCommandAction = async function(commandId) {
+  if (!currentDevice || !commandId) return;
+  try {
+    const res = await fetch(`/api/devices/${currentDevice.id}/commands/${encodeURIComponent(commandId)}/cancel`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('Command cancelled', 'info');
+    } else {
+      showToast(`Cannot cancel: ${data.error || res.status}`, 'error');
+    }
+    loadDeviceCommands(currentDevice.id);
+  } catch (err) {
+    showToast('Cancel failed: ' + err.message, 'error');
+  }
+};
 
 window.sendSyncFilesCommand = function() {
   if (currentDevice) {
@@ -1622,13 +1777,14 @@ async function loadDeviceCommands(deviceId) {
         // Find latest command of this type
         const latest = cmds.find(c => (c.command_type || c.commandType) === type);
         if (latest) {
-          statusEl.textContent = latest.status;
-          if (latest.status === 'COMPLETED') {
+          const s = String(latest.status || '').toUpperCase();
+          statusEl.textContent = s;
+          if (s === 'COMPLETED') {
             statusEl.style.color = '#34d399'; // green
-          } else if (latest.status === 'FAILED') {
+          } else if (s === 'FAILED' || s === 'REJECTED') {
             statusEl.style.color = '#f87171'; // red
-          } else if (latest.status === 'QUEUED' || latest.status === 'SENDING' || latest.status === 'RECEIVED' || latest.status === 'EXECUTING') {
-            statusEl.innerHTML = `<span style="display: inline-block; animation: pulse-ring 1.5s infinite;">⏳ ${latest.status}</span>`;
+          } else if (s === 'QUEUED' || s === 'PENDING' || s === 'DELIVERED' || s === 'SENT' || s === 'RECEIVED' || s === 'EXECUTING') {
+            statusEl.innerHTML = `<span style="display: inline-block; animation: pulse-ring 1.5s infinite;">⏳ ${s}</span>`;
             statusEl.style.color = '#f59e0b'; // amber
           } else {
             statusEl.style.color = 'var(--text-muted)';
@@ -1648,33 +1804,63 @@ window.fetchCommandHistory = function() {
   }
 };
 
+function statusPill(status) {
+  const s = String(status || '').toUpperCase();
+  let pillClass = 'pill';
+  let icon = '';
+  if (s === 'COMPLETED') { pillClass = 'pill pill-online'; icon = '✓ '; }
+  else if (s === 'FAILED' || s === 'REJECTED') { pillClass = 'pill pill-offline'; icon = '✗ '; }
+  else if (s === 'EXECUTING') { pillClass = 'pill purple'; icon = '⚙ '; }
+  else if (s === 'RECEIVED') { pillClass = 'pill'; icon = '📥 '; }
+  else if (s === 'DELIVERED' || s === 'SENT') { pillClass = 'pill'; icon = '→ '; }
+  else if (s === 'QUEUED' || s === 'PENDING') { pillClass = 'pill'; icon = '⏳ '; }
+  else if (s === 'EXPIRED' || s === 'CANCELLED') { pillClass = 'pill'; icon = '⊘ '; }
+  return `<span class="${pillClass}">${icon}${escapeHtml(s)}</span>`;
+}
+
 function renderCommandLifecycle(cmds) {
   const tbody = document.getElementById('tbody-command-lifecycle');
   if (!tbody) return;
   if (!cmds || cmds.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding: 16px;">No remote commands dispatched yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted" style="padding: 16px;">No remote commands dispatched yet.</td></tr>';
     return;
   }
-  tbody.innerHTML = cmds.slice(0, 20).map(c => {
-    let pillClass = 'pill';
-    if (c.status === 'COMPLETED') pillClass = 'pill pill-online';
-    else if (c.status === 'FAILED') pillClass = 'pill pill-offline';
-    else if (c.status === 'EXECUTING') pillClass = 'pill purple';
-    else if (c.status === 'SENDING' || c.status === 'QUEUED') pillClass = 'pill';
-    
+  tbody.innerHTML = cmds.slice(0, 25).map(c => {
+    const type = c.command_type || c.commandType || '';
+    const status = String(c.status || '').toUpperCase();
+    const created = Number(c.timestamp);
+    const completedTs = Number(c.completion_timestamp || c.completionTimestamp || 0);
+    const createdStr = created ? new Date(created).toLocaleString() : '--';
+    const completedStr = completedTs ? new Date(completedTs).toLocaleString() : '--';
+    const detail = c.result || c.error_message || c.errorMessage || '';
+    const canCancel = (status === 'QUEUED' || status === 'PENDING' || status === 'DELIVERED' || status === 'SENT');
+    const canRetry = (status === 'FAILED' || status === 'EXPIRED' || status === 'REJECTED');
+    const actions = [
+      canCancel ? `<button class="btn btn-sm" style="padding:2px 8px; font-size:0.7rem;" onclick="cancelCommandAction('${escapeHtml(String(c.id || c.commandId))}')">Cancel</button>` : '',
+      canRetry ? `<button class="btn btn-sm" style="padding:2px 8px; font-size:0.7rem;" onclick="retryCommandAction('${escapeHtml(String(c.id || c.commandId))}','${escapeHtml(type)}')">Retry</button>` : ''
+    ].filter(Boolean).join(' ');
     return `
       <tr>
-        <td><b>${escapeHtml(c.command_type || c.commandType || '')}</b></td>
-        <td><span class="${pillClass}">${c.status}</span></td>
-        <td style="font-family: monospace; font-size: 0.8rem;">${escapeHtml(c.device_id || currentDevice?.id || '--')}</td>
-        <td style="font-size: 0.82rem;">${new Date(Number(c.timestamp)).toLocaleTimeString()}</td>
-        <td style="font-size: 0.8rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-          ${escapeHtml(c.result || c.error_message || c.errorMessage || '--')}
+        <td><b>${escapeHtml(commandLabel(type))}</b><div style="font-size:0.68rem; color:var(--text-muted); font-family:monospace;">${escapeHtml(type)}</div></td>
+        <td>${statusPill(status)}</td>
+        <td style="font-family: monospace; font-size: 0.75rem;">${escapeHtml(String(c.id || c.commandId || '--')).slice(0, 18)}</td>
+        <td style="font-size: 0.78rem;">${escapeHtml(createdStr)}${completedTs ? `<br/>→ ${escapeHtml(completedStr)}` : ''}</td>
+        <td style="font-size: 0.78rem; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(detail)}">
+          ${escapeHtml(detail || '--')}
         </td>
+        <td style="white-space: nowrap;">${actions || '--'}</td>
       </tr>
     `;
   }).join('');
 }
+
+window.retryCommandAction = function(commandId, commandType) {
+  if (!currentDevice || !commandType) return;
+  const built = buildCommandParameters(commandType);
+  if (built.cancelled) return;
+  if (built.error) { showToast(built.error, 'error'); return; }
+  dispatchCommand(currentDevice.id, commandType, built.parameters || {});
+};
 
 window.triggerCommandAction = async function(cmdType) {
   if (!currentDevice) {
@@ -1869,20 +2055,100 @@ async function loadDeviceRecordings(deviceId) {
     if (!res.ok) return;
     const recs = await res.json();
     const container = document.getElementById('recordings-list');
-    if (recs.length === 0) {
+    const audioRecs = recs.filter(r => (r.media_kind || 'audio') !== 'video');
+    if (audioRecs.length === 0) {
       container.innerHTML = '<div class="empty-state">No audio diagnostic recordings available.</div>';
       return;
     }
-    container.innerHTML = recs.map(r => `
+    // Uploaded media requires an Authorization header — render blob URLs.
+    const rendered = await Promise.all(audioRecs.map(async (r) => {
+      const blobUrl = await fetchAuthedBlobUrl(r.file_path);
+      return `
       <div style="background: var(--bg-surface); padding: 14px; border-radius: 8px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
         <div>
           <div style="font-weight: 600;">${escapeHtml(r.file_name)}</div>
-          <div style="font-size: 0.78rem; color: var(--text-muted);">${new Date(r.created_at).toLocaleString()} • ${(r.duration_ms / 1000).toFixed(1)}s</div>
+          <div style="font-size: 0.78rem; color: var(--text-muted);">${new Date(r.created_at).toLocaleString()} • ${((r.duration_ms || 0) / 1000).toFixed(1)}s</div>
         </div>
-        <audio controls src="${r.file_path}" style="height: 36px;"></audio>
-      </div>
-    `).join('');
+        ${blobUrl
+          ? `<audio controls src="${blobUrl}" style="height: 36px;"></audio>`
+          : '<span style="color: var(--text-muted); font-size: 0.78rem;">Preview unavailable</span>'}
+      </div>`;
+    }));
+    container.innerHTML = rendered.join('');
   } catch (_) {}
+}
+
+// ---- Screenshots & screen recordings (Command Center media panels) ----------
+async function loadDeviceScreenshots(deviceId) {
+  const container = document.getElementById('screenshots-list');
+  if (!container) return;
+  container.innerHTML = '<div class="empty-state">Loading screenshots…</div>';
+  try {
+    const res = await fetch(`/api/devices/${deviceId}/screenshots`, {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (!res.ok) {
+      container.innerHTML = `<div class="empty-state">Could not load screenshots (${escapeHtml(String(res.status))}).</div>`;
+      return;
+    }
+    const shots = await res.json();
+    if (!shots.length) {
+      container.innerHTML = '<div class="empty-state">No screenshots yet. Use “Capture Screen” — the device user must authorize screen capture when prompted.</div>';
+      return;
+    }
+    const cards = await Promise.all(shots.slice(0, 12).map(async (s) => {
+      const blobUrl = await fetchAuthedBlobUrl(s.file_path);
+      const when = new Date(s.created_at).toLocaleString();
+      return `
+        <figure style="margin:0; background: var(--bg-surface); border-radius: 8px; overflow: hidden;">
+          ${blobUrl
+            ? `<img src="${blobUrl}" alt="Screenshot ${escapeHtml(when)}" style="width:100%; height:140px; object-fit:cover; cursor:pointer;" onclick="openMediaPreview('${escapeHtml(s.file_name)}','${escapeHtml(s.file_path)}','${Number(s.size_bytes) || 0}','image/png')" />`
+            : '<div style="height:140px; display:flex; align-items:center; justify-content:center; color:var(--text-muted);">Preview unavailable</div>'}
+          <figcaption style="padding: 6px 8px; font-size: 0.68rem; color: var(--text-muted);">
+            ${escapeHtml(s.kind || 'screenshot')} • ${escapeHtml(when)}${s.width ? ` • ${Number(s.width)}×${Number(s.height)}` : ''}
+          </figcaption>
+        </figure>`;
+    }));
+    container.innerHTML = `<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px;">${cards.join('')}</div>`;
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state">Failed to load screenshots.</div>';
+  }
+}
+
+async function loadDeviceVideos(deviceId) {
+  const container = document.getElementById('videos-list');
+  if (!container) return;
+  container.innerHTML = '<div class="empty-state">Loading recordings…</div>';
+  try {
+    const res = await fetch(`/api/devices/${deviceId}/videos`, {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (!res.ok) {
+      container.innerHTML = `<div class="empty-state">Could not load recordings (${escapeHtml(String(res.status))}).</div>`;
+      return;
+    }
+    const vids = await res.json();
+    if (!vids.length) {
+      container.innerHTML = '<div class="empty-state">No screen recordings yet. Start one with “Start Recording” — the device user must authorize screen capture when prompted.</div>';
+      return;
+    }
+    const cards = await Promise.all(vids.slice(0, 10).map(async (v) => {
+      const blobUrl = await fetchAuthedBlobUrl(v.file_path);
+      const when = new Date(v.created_at).toLocaleString();
+      return `
+        <div style="background: var(--bg-surface); border-radius: 8px; padding: 12px;">
+          <div style="font-weight:600; font-size: 0.85rem; margin-bottom: 4px;">${escapeHtml(v.file_name)}</div>
+          <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">${escapeHtml(when)} • ${((v.duration_ms || 0) / 1000).toFixed(1)}s${v.size_bytes ? ` • ${(Number(v.size_bytes) / (1024 * 1024)).toFixed(1)} MB` : ''}</div>
+          ${blobUrl
+            ? `<video controls preload="metadata" src="${blobUrl}" style="width:100%; max-height:220px; border-radius:6px; background:#000;"></video>
+               <button class="btn btn-sm" style="margin-top:8px;" onclick="downloadMediaFile('${escapeHtml(v.file_path)}','${escapeHtml(v.file_name)}')">⬇ Download</button>`
+            : '<div style="color:var(--text-muted); font-size:0.78rem;">Preview unavailable</div>'}
+        </div>`;
+    }));
+    container.innerHTML = `<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">${cards.join('')}</div>`;
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state">Failed to load recordings.</div>';
+  }
 }
 
 // Global caching for local search filtering
@@ -2889,7 +3155,7 @@ window.openMediaPreview = async function(name, path, sizeStr, mime) {
   if (!actualUrl) {
     // Remote pull interface — DOM-built (no innerHTML with user data).
     const loader = document.createElement('div');
-    loader.id = 'media-pull-loader';
+    loader.className = 'media-pull-loader';
     loader.style.cssText = 'padding: 40px; text-align: center; color: var(--cyan); width: 100%;';
 
     const icon = document.createElement('div');

@@ -111,6 +111,55 @@ and devices must re-pair.
 
 ---
 
+## 📱 Command Center & Remote Commands
+
+Every dashboard command runs end-to-end: the dashboard button maps to a
+**canonical command type** validated by the server registry
+(`server/src/commands.js`), queued with an expiry, delivered over the device
+WebSocket, executed by the Android agent, and completed **only** when the agent
+returns a validated result. The dashboard history shows the full lifecycle,
+result or error text, and offers Cancel/Retry.
+
+Capture commands use **visible user consent** on the device:
+
+- 📸 **Capture Screen** (`TAKE_SCREENSHOT`) — one frame via Android
+  MediaProjection after the user passes the system consent dialog.
+- 📷 **Take Photo** (`TAKE_PHOTO`) — opens the system camera; the device user
+  taps the shutter.
+- 🎬 **Screen recording** (`START_RECORDING` / `STOP_RECORDING` /
+  `RECORDING_STATUS`) — video-only (no microphone; Android blocks background
+  mic access), visible notification while recording, auto-stop at 5 min or
+  50 MB, finalized and uploaded before the dashboard shows anything.
+- Declines are reported as `REJECTED`, unanswered requests time out as
+  `FAILED`. Nothing is captured silently.
+
+Media uploads land in private server storage and are served **only** to the
+authenticated device owner (`GET /uploads/:filename` + ownership check).
+
+Command reference and schema: [docs/COMMAND_CONTRACT.md](docs/COMMAND_CONTRACT.md).
+
+### Staging test & deployment procedure
+
+1. `cd server && npm test` — full regression suite (commands, lifecycle,
+   media, auth, WS, ingestion).
+2. Start an isolated stack with test secrets:
+   ```bash
+   cp .env.example .env            # set JWT_SECRET + POSTGRES_PASSWORD
+   docker compose up --build       # PostgreSQL + backend on :3000
+   ```
+   or standalone: `cd server && JWT_SECRET=<test-secret> npm start`.
+3. `POST /api/auth/bootstrap` to create the staging admin, pair a test device,
+   and exercise the Command Center buttons; verify each status transition and
+   the screenshot/recording consent flow on the device.
+4. Build the Android APK from this branch
+   (`./gradlew :app:assembleDebug`, JDK 17 + Android SDK 36) and install it on
+   a physical device — screen capture cannot be exercised on an emulator
+   reliably.
+5. Deploy to production only after the staging checklist passes; rotate
+   `JWT_SECRET` and re-pair devices per the secret-rotation section above.
+
+---
+
 ## 🔒 Transparency & Permission Model
 
 This system strictly adheres to Android's official security and privacy model:
@@ -136,6 +185,6 @@ This system strictly adheres to Android's official security and privacy model:
 - **Live Location Tracking:** GPS & Network location queries using `FusedLocationProviderClient`, displayed with pinpoint accuracy circles and historical breadcrumbs on Leaflet.
 - **Notification Capture:** `NotificationListenerService` capturing app name, title, text, category, and timestamp with full text search and deletion controls.
 - **App Inventory & Usage:** Full inventory of installed system and third-party apps, plus 24-hour foreground usage stats via `UsageStatsManager`.
-- **Remote Command Center:** WebSocket-dispatched commands (`SYNC_DEVICE`, `REQUEST_LOCATION`, `REQUEST_APPS`, `REQUEST_USAGE`, `SEND_NOTIFICATION`, `START_RECORDING`, `STOP_RECORDING`) with real-time state transitions (`PENDING` ➔ `RUNNING` ➔ `COMPLETED` / `FAILED`).
+- **Remote Command Center:** WebSocket-dispatched commands with a canonical lifecycle (`QUEUED` ➔ `DELIVERED` ➔ `RECEIVED` ➔ `EXECUTING` ➔ `COMPLETED` / `FAILED` / `REJECTED` / `EXPIRED` / `CANCELLED`), offline queueing with delivery deadlines, idempotent replay, and structured results. See [docs/COMMAND_CONTRACT.md](docs/COMMAND_CONTRACT.md).
 - **Offline Resilience:** Room database local event queue for offline telemetry, location, and notifications with automatic synchronization when reconnected.
 - **Audit System:** Immutable administrative audit logs capturing timestamps, user IDs, actions, IP addresses, and payload details.

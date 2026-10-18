@@ -482,15 +482,23 @@
 
       <!-- TAB 4: COMMAND CENTER -->
       <div id="tab-commands" class="tab-panel">
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px;">
-          <button class="secondary cmd-btn" data-cmd="SCREENSHOT" style="margin:0; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+        <div id="command-consent-note" style="margin-bottom: 16px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; font-size: 0.78rem; color: var(--muted);">
+          ℹ️ Screenshot, photo and screen-recording commands require visible user consent on the device (Android MediaProjection / camera dialog).
+          The command status stays <b>EXECUTING</b> until the device user responds. Nothing is captured silently.
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px;">
+          <button class="secondary cmd-btn" data-cmd="TAKE_SCREENSHOT" title="Requires screen-capture consent on the device" style="margin:0; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
             <span>📸 Capture Screen</span>
+            <small style="opacity:0.7;">consent on device</small>
           </button>
-          <button class="secondary cmd-btn" data-cmd="CAMERA_CAPTURE" style="margin:0; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+          <button class="secondary cmd-btn" data-cmd="TAKE_PHOTO" title="Opens the system camera on the device — the user taps the shutter" style="margin:0; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
             <span>📷 Take Photo</span>
+            <small style="opacity:0.7;">user taps shutter</small>
           </button>
           <button class="secondary cmd-btn" data-cmd="RECORD_AUDIO" style="margin:0; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
-            <span>🎙️ Record Audio (10s)</span>
+            <span>🎙️ Record Audio</span>
+            <small style="opacity:0.7;">duration asked</small>
           </button>
           <button class="secondary cmd-btn" data-cmd="RING_ALARM" style="margin:0; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
             <span>🔔 Ring Alarm</span>
@@ -501,12 +509,37 @@
           <button class="secondary cmd-btn" data-cmd="SEND_NOTIFICATION" style="margin:0; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
             <span>💬 Push Notification</span>
           </button>
-          <button class="secondary cmd-btn" data-cmd="LOCK_DEVICE" style="margin:0; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+          <button class="secondary cmd-btn" data-cmd="LOCK_DEVICE" title="Requires Device Admin activation on the device" style="margin:0; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
             <span>🔒 Lock Screen</span>
+            <small style="opacity:0.7;">needs device admin</small>
           </button>
-          <button class="primary cmd-btn" data-cmd="WIPE_DEVICE" style="margin:0; padding: 16px; background: #f43f5e; box-shadow: none; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+          <button class="primary cmd-btn" data-cmd="WIPE_DEVICE" title="Wipes the agent's own data and unpairs — NOT a factory reset" style="margin:0; padding: 16px; background: #f43f5e; box-shadow: none; display: flex; flex-direction: column; align-items: center; gap: 8px;">
             <span>⚠️ Wipe Node Data</span>
+            <small style="opacity:0.8;">agent data only</small>
           </button>
+        </div>
+
+        <div class="panel" style="padding: 16px; margin-bottom: 20px;">
+          <h4 style="margin-bottom: 10px;">Screen Recording Session</h4>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button id="btn-start-recording" class="secondary" style="margin:0;">▶ Start Recording</button>
+            <button id="btn-stop-recording" class="secondary" style="margin:0;">⏹ Stop &amp; Upload</button>
+            <button id="btn-recording-status" class="secondary" style="margin:0;">ℹ️ Session Status</button>
+          </div>
+          <div style="margin-top: 8px; font-size: 0.75rem; color: var(--muted);">
+            Recording needs one-time screen-capture consent on the device (system dialog). A visible notification stays active while recording;
+            sessions auto-stop after 5 minutes or 50&nbsp;MB. The video appears below only after the device confirms finalization and upload.
+          </div>
+        </div>
+
+        <div class="panel" style="padding: 16px; margin-bottom: 20px;">
+          <h4 style="margin-bottom: 10px;">Device Screenshots</h4>
+          <div id="screenshots-list"><div class="empty-state">No screenshots yet.</div></div>
+        </div>
+
+        <div class="panel" style="padding: 16px; margin-bottom: 20px;">
+          <h4 style="margin-bottom: 10px;">Screen Recordings</h4>
+          <div id="videos-list"><div class="empty-state">No screen recordings yet.</div></div>
         </div>
 
         <div class="panel" style="padding: 20px;">
@@ -517,13 +550,14 @@
                 <tr>
                   <th>Command</th>
                   <th>Status</th>
-                  <th>Dispatched</th>
-                  <th>Completed</th>
+                  <th>ID</th>
+                  <th>Dispatched → Completed</th>
                   <th>Details</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody id="tbody-command-lifecycle">
-                <tr><td colspan="5" style="text-align: center;">No commands executed yet</td></tr>
+                <tr><td colspan="6" style="text-align: center;">No commands executed yet</td></tr>
               </tbody>
             </table>
             <div style="display: none;"><tbody id="commands-table-body"></tbody></div>

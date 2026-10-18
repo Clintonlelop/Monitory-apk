@@ -27,6 +27,7 @@ const memoryStore = {
   usage_statistics: [],
   files: [],
   recordings: [],
+  screenshots: [],
   commands: new Map(),
   alerts: [],
   audit_logs: [],
@@ -96,6 +97,26 @@ export async function initDb() {
         )`);
         // files.web_path: persist "Stream File Now" targets in PG mode too
         await client.query('ALTER TABLE files ADD COLUMN IF NOT EXISTS web_path TEXT');
+
+        // ---- Command contract (docs/COMMAND_CONTRACT.md) --------------------
+        await client.query('ALTER TABLE commands ADD COLUMN IF NOT EXISTS expires_at BIGINT');
+        await client.query('ALTER TABLE commands ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(160)');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_commands_idem ON commands(device_id, idempotency_key)');
+        // recordings carry both audio clips and finalized screen recordings
+        await client.query("ALTER TABLE recordings ADD COLUMN IF NOT EXISTS media_kind VARCHAR(20) DEFAULT 'audio'");
+        await client.query('ALTER TABLE recordings ADD COLUMN IF NOT EXISTS size_bytes BIGINT');
+        await client.query(`CREATE TABLE IF NOT EXISTS screenshots (
+          id BIGSERIAL PRIMARY KEY,
+          device_id VARCHAR(100) REFERENCES devices(id) ON DELETE CASCADE,
+          file_name VARCHAR(255) NOT NULL,
+          file_path TEXT NOT NULL,
+          kind VARCHAR(20) DEFAULT 'screenshot',
+          width INTEGER DEFAULT 0,
+          height INTEGER DEFAULT 0,
+          size_bytes BIGINT DEFAULT 0,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )`);
+        await client.query('CREATE INDEX IF NOT EXISTS idx_screenshots_device ON screenshots(device_id, created_at DESC)');
 
         // alerts: the code writes alert_type/title/message while older
         // schema.sql declared type/message. Normalize to alert_type/title/

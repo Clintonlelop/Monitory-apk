@@ -68,8 +68,10 @@ test('offline dispatch is honestly reported as queued, not executed', async () =
   });
   assert.equal(res.status, 200);
   assert.equal(res.data.dispatchedToOnlineDevice, false);
-  assert.equal(res.data.status, 'PENDING');
+  // Canonical lifecycle: offline commands are QUEUED (legacy name: PENDING).
+  assert.equal(res.data.status, 'QUEUED');
   assert.equal(res.data.queued, true);
+  assert.ok(res.data.expiresAt > Date.now(), 'queued commands carry a delivery deadline');
 });
 
 test('command status transitions accept known states and reject junk', async () => {

