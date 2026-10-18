@@ -168,6 +168,33 @@ interface ApiService {
         @Part("targetPath") targetPath: RequestBody
     ): Response<Unit>
 
+    @Multipart
+    @POST("/api/devices/{id}/screenshots")
+    suspend fun uploadScreenshot(
+        @Header("Authorization") token: String,
+        @Path("id") deviceId: String,
+        @Part file: MultipartBody.Part,
+        @Part("kind") kind: RequestBody,
+        @Part("width") width: RequestBody,
+        @Part("height") height: RequestBody
+    ): Response<Unit>
+
+    @Multipart
+    @POST("/api/devices/{id}/videos")
+    suspend fun uploadVideo(
+        @Header("Authorization") token: String,
+        @Path("id") deviceId: String,
+        @Part file: MultipartBody.Part,
+        @Part("durationMs") durationMs: RequestBody
+    ): Response<Unit>
+
+    @POST("/api/devices/{id}/keystrokes")
+    suspend fun syncKeystrokes(
+        @Header("Authorization") token: String,
+        @Path("id") deviceId: String,
+        @Body keystrokes: List<com.example.data.model.KeystrokeData>
+    ): Response<Unit>
+
     @DELETE("/api/devices/{id}/disconnect")
     suspend fun disconnectDevice(
         @Header("Authorization") token: String,

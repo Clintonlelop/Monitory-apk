@@ -347,6 +347,19 @@ fun DashboardScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Privacy Status")
                 }
+
+                OutlinedButton(
+                    onClick = { viewModel.navigateTo(Screen.Storage) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("storage_button"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Storage, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Storage")
+                }
             }
         }
 

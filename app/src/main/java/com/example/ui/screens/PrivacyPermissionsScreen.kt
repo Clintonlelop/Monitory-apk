@@ -1,9 +1,15 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,15 +24,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.PermMedia
 import androidx.compose.material.icons.filled.QueryStats
-import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Sms
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -40,6 +54,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -51,9 +66,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.example.DeviceManagerApp
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
@@ -67,9 +85,39 @@ fun PrivacyPermissionsScreen(
     val permissions by viewModel.permissions.collectAsState()
     val scrollState = rememberScrollState()
     var showDisconnectDialog by remember { mutableStateOf(false) }
+    var showDeviceOwnerDialog by remember { mutableStateOf(false) }
+
+    fun permissionsHelper() = (context.applicationContext as DeviceManagerApp).repository.permissionsHelper
+
+    // Single launcher used by every runtime-permission row (1..n permissions at once).
+    val runtimePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        // Grant results (or denials) are reflected on the next status check.
+        viewModel.refreshPermissions()
+    }
+
+    // Device-admin activation dialog (system UI) — refresh when the user returns.
+    val deviceAdminLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        viewModel.refreshPermissions()
+    }
 
     LaunchedEffect(Unit) {
         viewModel.refreshPermissions()
+    }
+
+    // Returning from Settings should re-evaluate every row without any startup prompt.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshPermissions()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Column(
@@ -137,7 +185,7 @@ fun PrivacyPermissionsScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "This device is actively monitored by its authorized owner. All actions require explicit Android system permission grants and remain fully visible.",
+                        text = "This device is actively monitored by its authorized owner. Every item below can be tapped to grant or fix it in Android Settings. All actions require explicit Android system permission grants and remain fully visible.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -147,79 +195,175 @@ fun PrivacyPermissionsScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        Text(
-            text = "Platform Permissions",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground
-        )
+        SectionHeader("Platform Permissions")
 
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Permissions Status List
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        PermissionCard {
+            PermissionItem(
+                icon = Icons.Default.MyLocation,
+                name = "Location",
+                isGranted = permissions.location,
+                onClick = {
+                    runtimePermissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                }
             )
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                PermissionItem(
-                    icon = Icons.Default.MyLocation,
-                    name = "Location",
-                    status = if (permissions.location) "ENABLED" else "DISABLED",
-                    isEnabled = permissions.location
-                )
+            PermissionItem(
+                icon = Icons.Default.Contacts,
+                name = "Contacts",
+                isGranted = permissions.contacts,
+                onClick = {
+                    runtimePermissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS))
+                }
+            )
+            PermissionItem(
+                icon = Icons.Default.Call,
+                name = "Call log",
+                isGranted = permissions.calls,
+                onClick = {
+                    runtimePermissionLauncher.launch(arrayOf(Manifest.permission.READ_CALL_LOG))
+                }
+            )
+            PermissionItem(
+                icon = Icons.Default.Sms,
+                name = "SMS",
+                isGranted = permissions.sms,
+                onClick = {
+                    runtimePermissionLauncher.launch(arrayOf(Manifest.permission.READ_SMS))
+                }
+            )
+            PermissionItem(
+                icon = Icons.Default.PermMedia,
+                name = "Media read",
+                isGranted = permissions.mediaRead,
+                onClick = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        runtimePermissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.READ_MEDIA_IMAGES,
+                                Manifest.permission.READ_MEDIA_VIDEO,
+                                Manifest.permission.READ_MEDIA_AUDIO
+                            )
+                        )
+                    } else {
+                        @Suppress("DEPRECATION")
+                        runtimePermissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+                    }
+                }
+            )
+            PermissionItem(
+                icon = Icons.Default.CameraAlt,
+                name = "Camera",
+                isGranted = permissions.camera,
+                onClick = {
+                    runtimePermissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                }
+            )
+            PermissionItem(
+                icon = Icons.Default.Mic,
+                name = "Microphone",
+                isGranted = permissions.microphone,
+                onClick = {
+                    runtimePermissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+                }
+            )
+            PermissionItem(
+                icon = Icons.Default.Notifications,
+                name = "Notifications",
+                isGranted = permissions.notificationAccess || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU,
+                onClick = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        runtimePermissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+                    } else {
+                        permissionsHelper().openAppSettings()
+                    }
+                }
+            )
+        }
 
-                PermissionItem(
-                    icon = Icons.Default.NotificationsActive,
-                    name = "Notification Access",
-                    status = if (permissions.notificationAccess) "ENABLED" else "DISABLED",
-                    isEnabled = permissions.notificationAccess
-                )
+        Spacer(modifier = Modifier.height(24.dp))
 
-                PermissionItem(
-                    icon = Icons.Default.Folder,
-                    name = "Files/Media",
-                    status = if (permissions.filesAccess) "ENABLED" else "DISABLED",
-                    isEnabled = permissions.filesAccess
-                )
+        SectionHeader("Special Access (system Settings)")
 
-                PermissionItem(
-                    icon = Icons.Default.CameraAlt,
-                    name = "Camera",
-                    status = if (permissions.camera) "ENABLED" else "DISABLED",
-                    isEnabled = permissions.camera
-                )
+        PermissionCard {
+            PermissionItem(
+                icon = Icons.Default.NotificationsActive,
+                name = "Notification listener",
+                isGranted = permissions.notificationAccess,
+                onClick = { permissionsHelper().openNotificationAccessSettings() }
+            )
+            PermissionItem(
+                icon = Icons.Default.QueryStats,
+                name = "Usage access",
+                isGranted = permissions.usageAccess,
+                onClick = { permissionsHelper().openUsageAccessSettings() }
+            )
+            PermissionItem(
+                icon = Icons.Default.FolderOpen,
+                name = "All files access",
+                isGranted = permissions.allFilesAccess,
+                onClick = { permissionsHelper().openAllFilesAccessSettings() }
+            )
+        }
 
-                PermissionItem(
-                    icon = Icons.Default.Mic,
-                    name = "Microphone",
-                    status = if (permissions.microphone) "ENABLED" else "DISABLED",
-                    isEnabled = permissions.microphone
-                )
+        Spacer(modifier = Modifier.height(24.dp))
 
-                PermissionItem(
-                    icon = Icons.Default.QueryStats,
-                    name = "Usage Access",
-                    status = if (permissions.usageAccess) "ENABLED" else "DISABLED",
-                    isEnabled = permissions.usageAccess
-                )
+        SectionHeader("Accessibility Service")
 
-                PermissionItem(
-                    icon = Icons.Default.ScreenShare,
-                    name = "Screen Sharing",
-                    status = if (permissions.screenSharing) "ACTIVE" else "NOT ACTIVE",
-                    isEnabled = permissions.screenSharing
-                )
-            }
+        PermissionCard {
+            PermissionItem(
+                icon = Icons.Default.Accessibility,
+                name = "Accessibility service",
+                isGranted = permissions.accessibility,
+                onClick = { permissionsHelper().openAccessibilitySettings() }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        SectionHeader("Device Policy")
+
+        PermissionCard {
+            PermissionItem(
+                icon = Icons.Default.Security,
+                name = "Device Admin",
+                isGranted = permissions.deviceAdmin,
+                onClick = {
+                    try {
+                        deviceAdminLauncher.launch(permissionsHelper().buildDeviceAdminIntent())
+                    } catch (e: Exception) {
+                        permissionsHelper().openAppSettings()
+                    }
+                }
+            )
+            PermissionItem(
+                icon = Icons.Default.VerifiedUser,
+                name = "Device Owner",
+                isGranted = permissions.deviceOwner,
+                onClick = { showDeviceOwnerDialog = true }
+            )
         }
 
         Spacer(modifier = Modifier.height(24.dp))
 
         // Action Buttons
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(
+                onClick = { viewModel.navigateTo(Screen.Storage) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("storage_browser_button"),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Open Storage & Files")
+            }
+
             Button(
                 onClick = {
                     val app = context.applicationContext as DeviceManagerApp
@@ -288,6 +432,23 @@ fun PrivacyPermissionsScreen(
         }
     }
 
+    if (showDeviceOwnerDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeviceOwnerDialog = false },
+            title = { Text("Device Owner") },
+            text = {
+                Text(
+                    "Device Owner is a provisioning mode that can only be set while the device is being set up (via device owner provisioning or ADB by an administrator).\n\n" +
+                        "It cannot be granted from a normal settings screen. If this device should be managed as Device Owner, ask its administrator to run the provisioning step; " +
+                        "otherwise the regular Device Admin activation above is enough for remote policy features."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showDeviceOwnerDialog = false }) { Text("Got it") }
+            }
+        )
+    }
+
     if (showDisconnectDialog) {
         AlertDialog(
             onDismissRequest = { showDisconnectDialog = false },
@@ -316,49 +477,90 @@ fun PrivacyPermissionsScreen(
 }
 
 @Composable
+private fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onBackground
+    )
+    Spacer(modifier = Modifier.height(10.dp))
+}
+
+@Composable
+private fun PermissionCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            content = content
+        )
+    }
+}
+
+/**
+ * One tappable permission row. Tapping always triggers the corresponding grant
+ * flow (runtime permission dialog or the right system Settings screen), so every
+ * item can be fixed manually even if the startup prompts never appeared.
+ */
+@Composable
 fun PermissionItem(
     icon: ImageVector,
     name: String,
-    status: String,
-    isEnabled: Boolean
+    isGranted: Boolean,
+    onClick: () -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Text(
-                text = name,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
-
-        // Status badge
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (isGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = name,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
+        // Status badge — single line, intrinsic width (name takes the leftover space)
+        Box(
             modifier = Modifier
                 .background(
-                    if (isEnabled) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
+                    if (isGranted) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
                     RoundedCornerShape(8.dp)
                 )
                 .padding(horizontal = 10.dp, vertical = 4.dp)
         ) {
             Text(
-                text = status,
+                text = if (isGranted) "GRANTED" else "NOT GRANTED",
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
-                color = if (isEnabled) Color(0xFF166534) else Color(0xFF64748B)
+                maxLines = 1,
+                softWrap = false,
+                color = if (isGranted) Color(0xFF166534) else Color(0xFF64748B)
             )
         }
+        Spacer(modifier = Modifier.width(6.dp))
+        Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = "Tap to grant",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier.size(18.dp)
+        )
     }
 }

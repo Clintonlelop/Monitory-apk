@@ -25,8 +25,10 @@ import androidx.compose.ui.Modifier
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.OnboardingScreen
+import com.example.ui.screens.PairingScreen
 import com.example.ui.screens.PrivacyPermissionsScreen
 import com.example.ui.screens.SetupWizardScreen
+import com.example.ui.screens.StorageBrowserScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
@@ -120,8 +122,10 @@ class MainActivity : ComponentActivity() {
                                 viewModel = viewModel,
                                 onRequestPermissions = { launchPermissionsRequest() }
                             )
+                            is Screen.Pairing -> PairingScreen(viewModel = viewModel)
                             is Screen.Dashboard -> DashboardScreen(viewModel = viewModel)
                             is Screen.Privacy -> PrivacyPermissionsScreen(viewModel = viewModel)
+                            is Screen.Storage -> StorageBrowserScreen(viewModel = viewModel)
                         }
                     }
                 }
@@ -138,6 +142,14 @@ class MainActivity : ComponentActivity() {
         val navigateTo = intent?.getStringExtra("navigate_to")
         if (navigateTo == "permissions") {
             viewModel.navigateTo(Screen.Privacy)
+        }
+        // Pairing enrollment: accept a QR/payload from external scanner intents
+        // (e.g. a QR scanner app sharing the payload) and run the pairing flow.
+        val pairingPayload = intent?.getStringExtra("pairing_payload")
+            ?: intent?.data?.getQueryParameter("payload")
+        if (!pairingPayload.isNullOrBlank()) {
+            viewModel.navigateTo(Screen.Pairing)
+            viewModel.parseAndPairWithPayload(pairingPayload)
         }
     }
 }

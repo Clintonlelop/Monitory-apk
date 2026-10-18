@@ -6,17 +6,20 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.data.local.dao.CommandDao
 import com.example.data.local.dao.EventDao
+import com.example.data.local.dao.KeystrokeDao
 import com.example.data.local.entity.CommandEntity
+import com.example.data.local.entity.KeystrokeEntity
 import com.example.data.local.entity.OfflineEventEntity
 
 @Database(
-    entities = [OfflineEventEntity::class, CommandEntity::class],
-    version = 1,
+    entities = [OfflineEventEntity::class, CommandEntity::class, KeystrokeEntity::class],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun eventDao(): EventDao
     abstract fun commandDao(): CommandDao
+    abstract fun keystrokeDao(): KeystrokeDao
 
     companion object {
         @Volatile

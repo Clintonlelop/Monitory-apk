@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Environment
 import android.os.StatFs
 import android.provider.DocumentsContract
+import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Button
@@ -37,6 +39,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -46,10 +49,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.example.DeviceManagerApp
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.Screen
+import java.io.File
 import java.text.DateFormat
 import java.util.Date
 
@@ -59,7 +68,9 @@ private data class StorageEntry(
     val mimeType: String?,
     val size: Long,
     val modified: Long,
-    val isDirectory: Boolean
+    val isDirectory: Boolean,
+    /** Non-null when the entry was listed via direct File access (all-files mode). */
+    val file: File? = null
 )
 
 @Composable
@@ -73,12 +84,66 @@ fun StorageBrowserScreen(viewModel: MainViewModel, modifier: Modifier = Modifier
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val directoryStack = remember { mutableStateListOf<Uri>() }
 
-    LaunchedEffect(selectedTree) {
-        val tree = selectedTree
-        if (tree != null && currentDirectory == null) {
-            directoryStack.clear()
-            directoryStack.add(tree)
-            loadDirectory(tree, tree)
+    // Direct File browsing (no folder picker) when "All files access" is granted.
+    var allFilesAccess by remember {
+        mutableStateOf(
+            (context.applicationContext as DeviceManagerApp).repository.permissionsHelper.isAllFilesAccessGranted()
+        )
+    }
+    var currentFileDir by remember { mutableStateOf<File?>(null) }
+    val fileStack = remember { mutableStateListOf<File>() }
+
+    // Re-check when returning from the Settings screen the button opens.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val granted =
+                    (context.applicationContext as DeviceManagerApp).repository.permissionsHelper.isAllFilesAccessGranted()
+                if (granted != allFilesAccess) {
+                    allFilesAccess = granted
+                    if (granted) {
+                        selectedTree = null
+                        currentDirectory = null
+                        currentFileDir = null
+                        fileStack.clear()
+                    } else {
+                        currentFileDir = null
+                        fileStack.clear()
+                        entries = emptyList()
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    fun loadFileDirectory(dir: File) {
+        try {
+            val files = dir.listFiles()
+            entries = (files ?: emptyArray()).map { f ->
+                StorageEntry(
+                    uri = Uri.fromFile(f),
+                    name = f.name,
+                    mimeType = if (f.isDirectory) {
+                        DocumentsContract.Document.MIME_TYPE_DIR
+                    } else {
+                        MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "*/*"
+                    },
+                    size = if (f.isFile) f.length() else 0L,
+                    modified = f.lastModified(),
+                    isDirectory = f.isDirectory,
+                    file = f
+                )
+            }.sortedWith(
+                compareByDescending<StorageEntry> { it.isDirectory }.thenBy { it.name.lowercase() }
+            )
+            currentFileDir = dir
+            errorMessage = null
+        } catch (e: Exception) {
+            errorMessage = "Couldn't read this folder: ${e.localizedMessage ?: "access denied"}"
+            entries = emptyList()
         }
     }
 
@@ -126,6 +191,24 @@ fun StorageBrowserScreen(viewModel: MainViewModel, modifier: Modifier = Modifier
         } catch (e: Exception) {
             errorMessage = "Couldn't read this folder: ${e.localizedMessage ?: "access denied"}"
             entries = emptyList()
+        }
+    }
+
+    LaunchedEffect(selectedTree) {
+        val tree = selectedTree
+        if (tree != null && currentDirectory == null && !allFilesAccess) {
+            directoryStack.clear()
+            directoryStack.add(tree)
+            loadDirectory(tree, tree)
+        }
+    }
+
+    LaunchedEffect(allFilesAccess) {
+        if (allFilesAccess && currentFileDir == null) {
+            val root = Environment.getExternalStorageDirectory()
+            fileStack.clear()
+            fileStack.add(root)
+            loadFileDirectory(root)
         }
     }
 
@@ -177,7 +260,11 @@ fun StorageBrowserScreen(viewModel: MainViewModel, modifier: Modifier = Modifier
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Storage & Files", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("Browse folders you choose on this device", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        if (allFilesAccess) "Browsing internal shared storage (All files access granted)"
+                        else "Browse folders you choose on this device",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
 
@@ -193,49 +280,84 @@ fun StorageBrowserScreen(viewModel: MainViewModel, modifier: Modifier = Modifier
                 }
             }
 
-            Button(onClick = { folderPicker.launch(selectedTree) }, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.FolderOpen, contentDescription = null)
-                Text(if (selectedTree == null) "Choose folder to browse" else "Choose another folder")
+            if (allFilesAccess) {
+                Text(
+                    "Full storage browsing is active. Folders open directly below — no folder picker needed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Button(onClick = { folderPicker.launch(selectedTree) }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null)
+                    Text(if (selectedTree == null) "Choose folder to browse" else "Choose another folder")
+                }
+                OutlinedButton(
+                    onClick = {
+                        (context.applicationContext as DeviceManagerApp)
+                            .repository.permissionsHelper.openAllFilesAccessSettings()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Lock, contentDescription = null)
+                    Text("Grant All files access (browse everything)")
+                }
+                Text(
+                    "Without All files access, Android only grants access to the folder you select and its descendants. Protected app folders may be blocked by Android.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-            Text(
-                "Android only grants access to the folder you select and its descendants. Protected app folders may be blocked by Android.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
 
-            if (currentDirectory != null) {
+            val hasContent = allFilesAccess || currentDirectory != null
+            if (hasContent) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        "Selected folder contents",
+                        if (allFilesAccess) currentFileDir?.absolutePath ?: "Storage contents"
+                        else "Selected folder contents",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedButton(
                         onClick = {
-                            val tree = selectedTree
-                            if (tree != null && directoryStack.size > 1) {
-                                directoryStack.removeAt(directoryStack.lastIndex)
-                                loadDirectory(tree, directoryStack.last())
+                            if (allFilesAccess) {
+                                if (fileStack.size > 1) {
+                                    fileStack.removeAt(fileStack.lastIndex)
+                                    loadFileDirectory(fileStack.last())
+                                }
+                            } else {
+                                val tree = selectedTree
+                                if (tree != null && directoryStack.size > 1) {
+                                    directoryStack.removeAt(directoryStack.lastIndex)
+                                    loadDirectory(tree, directoryStack.last())
+                                }
                             }
                         },
-                        enabled = directoryStack.size > 1
+                        enabled = if (allFilesAccess) fileStack.size > 1 else directoryStack.size > 1
                     ) { Text("Up") }
                 }
                 if (errorMessage != null) {
                     Text(errorMessage!!, color = MaterialTheme.colorScheme.error)
                 } else if (entries.isEmpty()) {
-                    Text("This folder is empty, or the provider returned no items.", style = MaterialTheme.typography.bodyMedium)
+                    Text("This folder is empty, or no items could be listed.", style = MaterialTheme.typography.bodyMedium)
                 }
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(entries, key = { it.uri.toString() }) { entry ->
                         Card(
                             modifier = Modifier.fillMaxWidth().clickable {
                                 if (entry.isDirectory) {
-                                    val tree = selectedTree
-                                    if (tree != null) {
-                                        directoryStack.add(entry.uri)
-                                        loadDirectory(tree, entry.uri)
+                                    if (allFilesAccess) {
+                                        entry.file?.let {
+                                            fileStack.add(it)
+                                            loadFileDirectory(it)
+                                        }
+                                    } else {
+                                        val tree = selectedTree
+                                        if (tree != null) {
+                                            directoryStack.add(entry.uri)
+                                            loadDirectory(tree, entry.uri)
+                                        }
                                     }
                                 } else {
                                     selectedEntry = entry
@@ -286,14 +408,23 @@ fun StorageBrowserScreen(viewModel: MainViewModel, modifier: Modifier = Modifier
                     Text("Type: ${entry.mimeType ?: "Unknown"}")
                     Text("Size: ${sizeLabel(entry.size)}")
                     Text("Last modified: ${if (entry.modified > 0) DateFormat.getDateTimeInstance().format(Date(entry.modified)) else "Unknown"}")
-                    Text("Location: ${entry.uri.lastPathSegment ?: "Selected folder"}")
+                    Text("Location: ${entry.file?.absolutePath ?: (entry.uri.lastPathSegment ?: "Selected folder")}")
                 }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = {
                     try {
+                        val viewUri: Uri = if (entry.file != null) {
+                            FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.fileprovider",
+                                entry.file
+                            )
+                        } else {
+                            entry.uri
+                        }
                         val openIntent = Intent(Intent.ACTION_VIEW).apply {
-                            setDataAndType(entry.uri, entry.mimeType ?: "*/*")
+                            setDataAndType(viewUri, entry.mimeType ?: "*/*")
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
                         context.startActivity(openIntent)

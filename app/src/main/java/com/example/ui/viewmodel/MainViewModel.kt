@@ -18,8 +18,10 @@ sealed class Screen {
     data object Onboarding : Screen()
     data object Auth : Screen()
     data object SetupWizard : Screen()
+    data object Pairing : Screen()
     data object Dashboard : Screen()
     data object Privacy : Screen()
+    data object Storage : Screen()
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -58,9 +60,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
 
     val serverUrl = MutableStateFlow(prefs.getServerUrl())
-    val userEmail = MutableStateFlow(prefs.getUserEmail() ?: "clintonumelo15@gmail.com")
-    val userPassword = MutableStateFlow("admin123")
-    val username = MutableStateFlow("Clinton")
+    val userEmail = MutableStateFlow(prefs.getUserEmail() ?: "")
+    val userPassword = MutableStateFlow("")
+    val username = MutableStateFlow("")
     val isRegisterMode = MutableStateFlow(false)
     val pairingCode = MutableStateFlow("")
     val deviceName = MutableStateFlow(prefs.getDeviceName())
@@ -194,7 +196,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (raw.startsWith("{")) {
             try {
                 val json = org.json.JSONObject(raw)
-                val targetServerUrl = json.optString("serverUrl")
+                // QR payload contract: accept both v1 key styles ("serverUrl")
+                // and legacy aliases ("server") so either backend shape works.
+                val targetServerUrl = json.optString("serverUrl").takeIf { it.isNotBlank() }
+                    ?: json.optString("server")
                 val code = json.optString("code")
                 val expiresAt = json.optString("expiresAt")
 

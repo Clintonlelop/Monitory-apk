@@ -206,9 +206,25 @@ function setupAuth() {
 
 function initDashboard() {
   connectWebSocket();
-  loadDevices();
+  loadDevices().then(() => updateSystemHealth());
   loadAuditLogs();
   loadAlerts();
+
+  // "Refresh Files" in the File Explorer panel (previously a dead duplicate id)
+  const refreshFilesBtn = document.getElementById('btn-refresh-files');
+  if (refreshFilesBtn) {
+    refreshFilesBtn.addEventListener('click', () => {
+      if (currentDevice) {
+        loadDeviceFiles(currentDevice.id);
+        showToast('Refreshing file list…');
+      } else {
+        showToast('Open a device first', 'warning');
+      }
+    });
+  }
+
+  // Keep the health card current even when no WS events arrive.
+  setInterval(updateSystemHealth, 30000);
 }
 
 // Navigation
@@ -271,18 +287,24 @@ function showView(viewName) {
 // WebSocket Live Real-Time Connection
 function connectWebSocket() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${location.host}/ws/dashboard`;
+  const wsUrl = `${protocol}//${location.host}/ws/dashboard?token=${encodeURIComponent(authToken || '')}`;
 
   ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
-    document.getElementById('ws-status-text').textContent = 'Live Synced';
-    document.querySelector('.pulse-dot').style.background = '#10b981';
+    const el = document.getElementById('ws-status-text');
+    if (el) el.textContent = 'Live Synced';
+    const dot = document.querySelector('.pulse-dot');
+    if (dot) dot.style.background = '#10b981';
+    if (typeof updateSystemHealth === 'function') updateSystemHealth();
   };
 
   ws.onclose = () => {
-    document.getElementById('ws-status-text').textContent = 'Disconnected';
-    document.querySelector('.pulse-dot').style.background = '#ef4444';
+    const el = document.getElementById('ws-status-text');
+    if (el) el.textContent = 'Disconnected';
+    const dot = document.querySelector('.pulse-dot');
+    if (dot) dot.style.background = '#ef4444';
+    if (typeof updateSystemHealth === 'function') updateSystemHealth();
     setTimeout(connectWebSocket, 3000);
   };
 
@@ -294,17 +316,25 @@ function connectWebSocket() {
   };
 }
 
+let _loadDevicesTimer = null;
+function scheduleDevicesRefresh() {
+  clearTimeout(_loadDevicesTimer);
+  _loadDevicesTimer = setTimeout(() => {
+    loadDevices().then(() => updateSystemHealth());
+  }, 400);
+}
+
 function handleWsMessage(msg) {
   resetHeartbeatTime();
   if (msg.type === 'DEVICE_STATUS_CHANGED') {
     updateDeviceStatusInUi(msg.deviceId, msg.status);
-    loadDevices();
+    scheduleDevicesRefresh();
     pushConsoleTimeline('SYSTEM', 'Device Status Transition', `Device is now ${msg.status}`, msg.status === 'ONLINE' ? 'success' : 'error');
   } else if (msg.type === 'DEVICE_TELEMETRY_UPDATED') {
     if (currentDevice && currentDevice.id === msg.deviceId) {
       applyTelemetry(msg.telemetry);
     }
-    loadDevices();
+    scheduleDevicesRefresh();
     const bLevel = msg.telemetry ? (msg.telemetry.battery_level !== undefined ? msg.telemetry.battery_level : msg.telemetry.batteryLevel) : 0;
     pushConsoleTimeline('SYSTEM', 'Telemetry Broadcast Received', `Battery: ${bLevel || 0}% • RAM: ${Math.round((msg.telemetry?.ram_available || 0) / (1024*1024))} MB Free`, 'info');
   } else if (msg.type === 'DEVICE_LOCATION_UPDATED') {
@@ -324,8 +354,24 @@ function handleWsMessage(msg) {
   } else if (msg.type === 'COMMAND_STATUS_UPDATED') {
     if (currentDevice && currentDevice.id === msg.deviceId) {
       loadDeviceCommands(currentDevice.id);
+      if (msg.status === 'COMPLETED' || msg.status === 'FAILED' || msg.status === 'REJECTED') {
+        loadDeviceScreenshots(currentDevice.id);
+        loadDeviceVideos(currentDevice.id);
+        loadDeviceRecordings(currentDevice.id);
+        if (msg.status === 'COMPLETED') {
+          showToast(`Command completed: ${escapeHtml(msg.result || 'done')}`, 'success');
+        } else {
+          showToast(`Command ${String(msg.status).toLowerCase()}: ${escapeHtml(msg.errorMessage || 'no details')}`, 'error');
+        }
+      }
     }
-    pushConsoleTimeline('COMMANDS', 'Execution Sync Acknowledged', `Command: ${msg.commandType || 'SYNC'} • Status: ${msg.status || 'QUEUED'}`, msg.status === 'COMPLETED' ? 'success' : (msg.status === 'FAILED' ? 'error' : 'warning'));
+    pushConsoleTimeline('COMMANDS', 'Execution Status Update', `Command: ${msg.commandId || 'sync'} • ${msg.status || 'QUEUED'}${msg.result ? ' • ' + msg.result : ''}`, msg.status === 'COMPLETED' ? 'success' : ((msg.status === 'FAILED' || msg.status === 'REJECTED') ? 'error' : 'warning'));
+  } else if (msg.type === 'SCREENSHOT_UPLOADED' || msg.type === 'DEVICE_RECORDING_UPLOADED') {
+    if (currentDevice && currentDevice.id === msg.deviceId) {
+      if (msg.type === 'SCREENSHOT_UPLOADED') loadDeviceScreenshots(currentDevice.id);
+      else loadDeviceVideos(currentDevice.id);
+    }
+    pushConsoleTimeline('MEDIA', msg.type === 'SCREENSHOT_UPLOADED' ? 'Screenshot Uploaded' : 'Screen Recording Uploaded', 'Authenticated media is ready for preview', 'success');
   } else if (msg.type === 'GEOFENCE_ALERT') {
     pushConsoleTimeline('LOCATION', `GEOFENCE ${msg.eventType}: ${msg.geofenceName || 'Boundary'}`, `Device ${msg.eventType?.toLowerCase() || 'entered'} perimeter`, msg.eventType === 'ENTERED' ? 'success' : 'warning');
     appendNotificationFeed({
@@ -373,14 +419,41 @@ function handleWsMessage(msg) {
       pulseDot.style.boxShadow = '0 0 10px #10b981';
     }
     if (window.loadPairingCodesHistory) window.loadPairingCodesHistory();
-    loadDevices();
-    showToast(`Device ${msg.deviceName || 'Android'} paired successfully!`);
+    scheduleDevicesRefresh();
+    showToast(`Device ${msg.deviceName || 'Android'} enrolled — waiting for the device agent to connect`);
     pushConsoleTimeline('SYSTEM', 'New Device Enrolled', `Paired ${msg.deviceName || 'Device'} (${msg.deviceId || ''})`, 'success');
   }
 }
 
 // Devices Management
 let allDevices = [];
+
+function showToast(message, type = 'info') {
+  const el = document.getElementById('toast');
+  if (!el) {
+    console.warn('[toast]', message);
+    return;
+  }
+  el.textContent = String(message);
+  el.className = `show ${type}`;
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => { el.className = ''; }, 4200);
+}
+
+// Wire elements rendered with data-action attributes to handlers — used
+// instead of inline onclick="…'${userString}'…" (which is an XSS sink).
+function wireActions(container, handlers) {
+  if (!container) return;
+  container.querySelectorAll('[data-action]').forEach(el => {
+    const fn = handlers[el.dataset.action];
+    if (!fn || el.dataset.wired === '1') return;
+    el.dataset.wired = '1';
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      fn(el.dataset, e);
+    });
+  });
+}
 
 async function loadDevices() {
   try {
@@ -420,21 +493,25 @@ function renderDevicesGrid(devices) {
   }
 
   container.innerHTML = devices.map(d => `
-    <div class="device-card" onclick="openDeviceDetail('${d.id}')">
+    <div class="device-card" data-action="open-device" data-id="${escapeHtml(d.id)}" style="cursor: pointer;">
       <div class="device-card-header">
         <div>
           <div class="device-card-name">${escapeHtml(d.device_name || 'Android Device')}</div>
           <div class="device-card-meta">${escapeHtml(d.manufacturer || '')} ${escapeHtml(d.model || '')} • Android ${escapeHtml(d.os_version || '')}</div>
         </div>
-        <span class="pill ${d.status === 'ONLINE' ? 'pill-online' : 'pill-offline'}">${d.status || 'OFFLINE'}</span>
+        <span class="pill ${d.status === 'ONLINE' ? 'pill-online' : 'pill-offline'}">${escapeHtml(d.status || 'OFFLINE')}</span>
       </div>
       <div class="device-card-metrics">
-        <span>🔋 ${d.battery_level || 0}% ${d.is_charging ? '⚡' : ''}</span>
-        <span>📡 ${d.network_type || 'Unknown'}</span>
+        <span>🔋 ${d.battery_level === null || d.battery_level === undefined ? '—' : `${escapeHtml(d.battery_level)}%`} ${d.is_charging ? '⚡' : ''}</span>
+        <span>📡 ${escapeHtml(d.network_type || 'Unknown')}</span>
         <span>🕒 ${d.last_seen ? formatTimeAgo(d.last_seen) : 'Never'}</span>
       </div>
     </div>
   `).join('');
+
+  wireActions(container, {
+    'open-device': (data) => openDeviceDetail(data.id)
+  });
 }
 
 function renderOverviewDevicesList(devices) {
@@ -460,11 +537,11 @@ function renderOverviewDevicesList(devices) {
     const phoneLetter = (d.device_name || d.model || 'A').charAt(0).toUpperCase();
     const isOnline = d.status === 'ONLINE';
     const statusClass = isOnline ? 'online' : 'offline';
-    const batLevel = d.battery_level !== undefined ? d.battery_level : 0;
+    const batLevel = d.battery_level !== null && d.battery_level !== undefined ? d.battery_level : null;
     const lastSeenStr = d.last_seen ? formatTimeAgo(d.last_seen) : 'Never';
 
     return `
-      <tr onclick="openDeviceDetail('${d.id}')" style="cursor: pointer;">
+      <tr data-action="open-device" data-id="${escapeHtml(d.id)}" style="cursor: pointer;">
         <td>
           <div class="device">
             <span class="phone ${phoneClass}">${phoneLetter}</span>
@@ -474,15 +551,21 @@ function renderOverviewDevicesList(devices) {
             </div>
           </div>
         </td>
-        <td><span class="status ${statusClass}">● ${d.status || 'OFFLINE'}</span></td>
+        <td><span class="status ${statusClass}">● ${escapeHtml(d.status || 'OFFLINE')}</span></td>
         <td>
-          <span class="battery"><i style="width: ${Math.min(100, Math.max(0, batLevel))}%"></i></span> ${batLevel}%
+          ${batLevel === null
+            ? '<span class="text-muted">—</span>'
+            : `<span class="battery"><i style="width: ${Math.min(100, Math.max(0, batLevel))}%"></i></span> ${escapeHtml(batLevel)}%`}
         </td>
         <td>${lastSeenStr}</td>
-        <td><button class="more" title="View details" onclick="event.stopPropagation(); openDeviceDetail('${d.id}')">···</button></td>
+        <td><button class="more" title="View details" data-action="open-device" data-id="${escapeHtml(d.id)}">···</button></td>
       </tr>
     `;
   }).join('');
+
+  wireActions(tbody, {
+    'open-device': (data) => openDeviceDetail(data.id)
+  });
 }
 
 function filterDevices(query) {
@@ -542,6 +625,8 @@ window.openDeviceDetail = async function(deviceId) {
     loadDeviceUsage(deviceId);
     loadDeviceCommands(deviceId);
     loadDeviceRecordings(deviceId);
+    loadDeviceScreenshots(deviceId);
+    loadDeviceVideos(deviceId);
     loadDeviceSMS(deviceId);
     loadDeviceCalls(deviceId);
     loadDeviceContacts(deviceId);
@@ -748,7 +833,7 @@ function renderPermissions(perms) {
   ];
 
   const html = list.map(item => `
-    <div class="perm-row" onclick="openPermissionDrawer('${escapeJs(item.label)}', '${item.code}', ${!!item.val})">
+    <div class="perm-row" data-action="open-permission" data-label="${escapeHtml(item.label)}" data-code="${escapeHtml(item.code)}" data-val="${item.val ? '1' : '0'}" style="cursor: pointer;">
       <span class="perm-label" style="font-size: 0.8rem; font-weight: 500;">${escapeHtml(item.label)}</span>
       <span class="pill ${item.val ? 'pill-online' : 'pill-offline'}" style="padding: 2px 8px; font-size: 0.65rem;">${item.val ? 'GRANTED' : 'DISABLED'}</span>
     </div>
@@ -756,6 +841,12 @@ function renderPermissions(perms) {
 
   if (legacyContainer) legacyContainer.innerHTML = html;
   if (checklistContainer) checklistContainer.innerHTML = html;
+
+  const permHandlers = {
+    'open-permission': (data) => openPermissionDrawer(data.label, data.code, data.val === '1')
+  };
+  wireActions(legacyContainer, permHandlers);
+  wireActions(checklistContainer, permHandlers);
 
   // Update Accessibility Management Panel elements
   const accessSrvBadge = document.getElementById('access-srv-badge');
@@ -857,6 +948,10 @@ function setupDetailTabs() {
 
 // Leaflet Map Integration
 function initMap() {
+  if (typeof L === 'undefined') {
+    console.warn('Leaflet not available — map disabled');
+    return;
+  }
   const mapContainer = document.getElementById('map-container');
   if (!mapContainer) return;
 
@@ -874,6 +969,10 @@ function initMap() {
 }
 
 function initConsoleMap() {
+  if (typeof L === 'undefined') {
+    console.warn('Leaflet not available — console map disabled');
+    return;
+  }
   const container = document.getElementById('console-map-container');
   if (!container) return;
 
@@ -1201,12 +1300,12 @@ async function loadDeviceNotifications(deviceId) {
         tbody.innerHTML = '<tr><td colspan="5" class="text-center">No notifications recorded</td></tr>';
       } else {
         tbody.innerHTML = notifs.map(n => `
-          <tr style="cursor: pointer;" onclick="openNotificationDrawer('${escapeJs(n.app_name || n.package_name)}', '${escapeJs(n.title || '')}', '${escapeJs(n.text || '')}', '${new Date(Number(n.post_time)).toLocaleString()}')">
+          <tr style="cursor: pointer;" data-action="open-notification" data-app="${escapeHtml(n.app_name || n.package_name || '')}" data-title="${escapeHtml(n.title || '')}" data-text="${escapeHtml(n.text || '')}" data-time="${escapeHtml(new Date(Number(n.post_time)).toLocaleString())}">
             <td><b style="color: #818cf8;">${escapeHtml(n.app_name || n.package_name)}</b></td>
             <td>${escapeHtml(n.title || '')}</td>
             <td style="max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(n.text || '')}</td>
             <td>${new Date(Number(n.post_time)).toLocaleTimeString()}</td>
-            <td onclick="event.stopPropagation()"><button class="btn-icon" onclick="deleteNotification('${deviceId}', '${n.id}')">🗑️</button></td>
+            <td onclick="event.stopPropagation()"><button class="btn-icon" data-action="delete-notification" data-notif-id="${escapeHtml(n.id)}">🗑️</button></td>
           </tr>
         `).join('');
       }
@@ -1221,7 +1320,7 @@ async function loadDeviceNotifications(deviceId) {
         consoleNotifContainer.innerHTML = '<div class="empty-state">No push notifications received yet. Waiting for device stream...</div>';
       } else {
         consoleNotifContainer.innerHTML = notifs.slice(0, 5).map(n => `
-          <div class="perm-row" onclick="openNotificationDrawer('${escapeJs(n.app_name || n.package_name)}', '${escapeJs(n.title || '')}', '${escapeJs(n.text || '')}', '${new Date(Number(n.post_time)).toLocaleString()}')" style="display: flex; align-items: flex-start; gap: 10px; background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 8px; padding: 10px; cursor: pointer; transition: background 0.2s;">
+          <div class="perm-row" data-action="open-notification" data-app="${escapeHtml(n.app_name || n.package_name || '')}" data-title="${escapeHtml(n.title || '')}" data-text="${escapeHtml(n.text || '')}" data-time="${escapeHtml(new Date(Number(n.post_time)).toLocaleString())}" style="display: flex; align-items: flex-start; gap: 10px; background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 8px; padding: 10px; cursor: pointer; transition: background 0.2s;">
             <div style="background: rgba(129, 140, 248, 0.1); border-radius: 6px; padding: 6px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; line-height: 1;">🔔</div>
             <div style="flex: 1; min-width: 0;">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
@@ -1235,6 +1334,13 @@ async function loadDeviceNotifications(deviceId) {
         `).join('');
       }
     }
+
+    const notifHandlers = {
+      'open-notification': (data) => openNotificationDrawer(data.app, data.title, data.text, data.time),
+      'delete-notification': (data) => window.deleteNotification(deviceId, data.notifId)
+    };
+    wireActions(tbody, notifHandlers);
+    wireActions(consoleNotifContainer, notifHandlers);
   } catch (_) {}
 }
 
@@ -1289,13 +1395,18 @@ async function loadDeviceApps(deviceId) {
           <td><span class="pill ${isSys ? 'pill-offline' : 'pill-online'}">${isSys ? 'SYSTEM' : 'USER'}</span></td>
           <td>
             <div style="display: flex; gap: 6px;">
-              <button class="btn btn-sm" style="padding: 3px 8px; font-size: 0.75rem;" onclick="launchApp('${deviceId}', '${pkg}')">🚀 Launch</button>
-              <button class="btn btn-sm btn-danger" style="padding: 3px 8px; font-size: 0.75rem;" onclick="uninstallApp('${deviceId}', '${pkg}')">🗑️ Uninstall</button>
+              <button class="btn btn-sm" style="padding: 3px 8px; font-size: 0.75rem;" data-action="launch-app" data-pkg="${pkg}">🚀 Launch</button>
+              <button class="btn btn-sm btn-danger" style="padding: 3px 8px; font-size: 0.75rem;" data-action="uninstall-app" data-pkg="${pkg}">🗑️ Uninstall</button>
             </div>
           </td>
         </tr>
       `;
     }).join('');
+
+    wireActions(tbody, {
+      'launch-app': (data) => launchApp(deviceId, data.pkg),
+      'uninstall-app': (data) => uninstallApp(deviceId, data.pkg)
+    });
   } catch (_) {}
 }
 
@@ -1400,6 +1511,94 @@ async function loadDeviceUsage(deviceId) {
 }
 
 // Command Center
+// Canonical command contract: data-cmd carries the exact server commandType
+// (docs/COMMAND_CONTRACT.md). Interactive commands collect validated
+// parameters here before dispatch.
+const COMMAND_LABELS = {
+  TAKE_SCREENSHOT: 'Screenshot',
+  TAKE_PHOTO: 'Photo',
+  RECORD_AUDIO: 'Audio clip',
+  START_RECORDING: 'Screen recording start',
+  STOP_RECORDING: 'Screen recording stop',
+  RECORDING_STATUS: 'Recording status',
+  RING_ALARM: 'Alarm',
+  VIBRATE: 'Vibrate',
+  SEND_NOTIFICATION: 'Notification',
+  LOCK_DEVICE: 'Screen lock',
+  WIPE_DEVICE: 'Agent data wipe',
+  LAUNCH_APP: 'App launch',
+  UNINSTALL_APP: 'App uninstall',
+  UPLOAD_FILE: 'File upload',
+  SYNC_DEVICE: 'Device sync',
+  REQUEST_LOCATION: 'Location',
+  REQUEST_APPS: 'App inventory',
+  REQUEST_USAGE: 'Usage stats',
+  SYNC_FILES: 'File sync',
+  REFRESH_TELEMETRY: 'Telemetry',
+  REFRESH_PERMISSIONS: 'Permission audit',
+  SYNC_NOTIFICATIONS: 'Notification sync',
+  SYNC_CONTACTS: 'Contact sync',
+  SYNC_APPLICATIONS: 'App sync',
+  SYNC_USAGE: 'Usage sync',
+  SYNC_SMS: 'SMS sync',
+  SYNC_CALLS: 'Call log sync',
+  SYNC_KEYSTROKES: 'Text log sync'
+};
+
+function commandLabel(type) {
+  return COMMAND_LABELS[type] || type;
+}
+
+// Build validated parameters for interactive commands. Returns
+// { parameters } or { error } or { cancelled: true }.
+function buildCommandParameters(commandType) {
+  if (commandType === 'SEND_NOTIFICATION') {
+    const msg = prompt('Enter alert message to display on the Android device:');
+    if (msg === null) return { cancelled: true };
+    const trimmed = msg.trim();
+    if (!trimmed) return { error: 'Alert message cannot be empty' };
+    if (trimmed.length > 500) return { error: 'Alert message is too long (max 500 characters)' };
+    return { parameters: { title: 'Admin Alert', message: trimmed } };
+  }
+  if (commandType === 'RECORD_AUDIO') {
+    const raw = prompt('Recording duration in seconds (1-60):', '10');
+    if (raw === null) return { cancelled: true };
+    const seconds = Number(raw);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60) {
+      return { error: 'Duration must be a whole number between 1 and 60 seconds' };
+    }
+    return { parameters: { durationSeconds: seconds } };
+  }
+  if (commandType === 'RING_ALARM') {
+    const raw = prompt('Alarm duration in seconds (3-30):', '10');
+    if (raw === null) return { cancelled: true };
+    const seconds = Number(raw);
+    if (!Number.isInteger(seconds) || seconds < 3 || seconds > 30) {
+      return { error: 'Alarm duration must be a whole number between 3 and 30 seconds' };
+    }
+    return { parameters: { durationSeconds: seconds } };
+  }
+  if (commandType === 'VIBRATE') {
+    const raw = prompt('Vibration duration in milliseconds (100-2000):', '800');
+    if (raw === null) return { cancelled: true };
+    const ms = Number(raw);
+    if (!Number.isInteger(ms) || ms < 100 || ms > 2000) {
+      return { error: 'Vibration duration must be a whole number between 100 and 2000 ms' };
+    }
+    return { parameters: { durationMs: ms } };
+  }
+  if (commandType === 'WIPE_DEVICE') {
+    const ok = confirm(
+      'WIPE AGENT DATA\n\nThis removes the pairing and clears the Monitory agent\'s local data ' +
+      'on the device (logs, tokens, cached files). It is NOT a factory reset and does not touch ' +
+      'personal photos, apps or accounts.\n\nContinue?'
+    );
+    if (!ok) return { cancelled: true };
+    return { parameters: { confirm: 'WIPE' } };
+  }
+  return { parameters: {} };
+}
+
 function setupCommandButtons() {
   document.querySelectorAll('.cmd-tile, .cmd-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -1409,8 +1608,30 @@ function setupCommandButtons() {
         alert('Please open an active device from Fleet Devices first.');
         return;
       }
-      await dispatchCommand(currentDevice.id, cmdType);
+      const built = buildCommandParameters(cmdType);
+      if (built.cancelled) return;
+      if (built.error) {
+        showToast(built.error, 'error');
+        return;
+      }
+      await dispatchCommand(currentDevice.id, cmdType, built.parameters || {});
     });
+  });
+
+  const btnStartRec = document.getElementById('btn-start-recording');
+  if (btnStartRec) btnStartRec.addEventListener('click', async () => {
+    if (!currentDevice) { showToast('Select a device first', 'warning'); return; }
+    await dispatchCommand(currentDevice.id, 'START_RECORDING', {});
+  });
+  const btnStopRec = document.getElementById('btn-stop-recording');
+  if (btnStopRec) btnStopRec.addEventListener('click', async () => {
+    if (!currentDevice) { showToast('Select a device first', 'warning'); return; }
+    await dispatchCommand(currentDevice.id, 'STOP_RECORDING', {});
+  });
+  const btnRecStatus = document.getElementById('btn-recording-status');
+  if (btnRecStatus) btnRecStatus.addEventListener('click', async () => {
+    if (!currentDevice) { showToast('Select a device first', 'warning'); return; }
+    await dispatchCommand(currentDevice.id, 'RECORDING_STATUS', {});
   });
 
   const btnSync = document.getElementById('btn-cmd-sync');
@@ -1448,12 +1669,6 @@ function setupCommandButtons() {
 }
 
 async function dispatchCommand(deviceId, commandType, parameters = {}) {
-  if (commandType === 'SEND_NOTIFICATION') {
-    const msg = prompt('Enter alert message to display on the Android device:');
-    if (!msg) return;
-    parameters = { title: 'Admin Alert', message: msg };
-  }
-
   try {
     const res = await fetch(`/api/devices/${deviceId}/commands`, {
       method: 'POST',
@@ -1464,12 +1679,51 @@ async function dispatchCommand(deviceId, commandType, parameters = {}) {
       body: JSON.stringify({ commandType, parameters })
     });
     const data = await res.json();
-    alert(`Command ${commandType} dispatched! (Status: ${data.status})`);
+    if (!res.ok || data.error) {
+      const reason = data.error || `HTTP ${res.status}`;
+      showToast(`${commandLabel(commandType)} rejected: ${reason}`, 'error');
+      pushConsoleTimeline('COMMANDS', 'Command Rejected', `${commandLabel(commandType)} — ${reason}`, 'error');
+    } else if (data.idempotentReplay) {
+      showToast(`${commandLabel(commandType)} already dispatched (idempotent replay)`, 'info');
+    } else if (data.dispatchedToOnlineDevice) {
+      let extra = '';
+      if (data.requiresConsent === 'screen-capture') {
+        extra = ' — authorize on the device when prompted';
+      } else if (data.requiresConsent === 'camera') {
+        extra = ' — tap the shutter in the camera app on the device';
+      }
+      showToast(`${commandLabel(commandType)} delivered to device${extra}`, 'success');
+      pushConsoleTimeline('COMMANDS', 'Command Delivered', `${commandLabel(commandType)} (${data.commandId})`, 'info');
+    } else {
+      showToast(`Device offline — ${commandLabel(commandType)} queued (expires ${new Date(data.expiresAt).toLocaleTimeString()})`, 'warning');
+      pushConsoleTimeline('COMMANDS', 'Command Queued', `${commandLabel(commandType)} will deliver on reconnect`, 'warning');
+    }
     loadDeviceCommands(deviceId);
+    return data;
   } catch (err) {
-    alert('Error dispatching command: ' + err.message);
+    showToast('Error dispatching command: ' + err.message, 'error');
+    return null;
   }
 }
+
+window.cancelCommandAction = async function(commandId) {
+  if (!currentDevice || !commandId) return;
+  try {
+    const res = await fetch(`/api/devices/${currentDevice.id}/commands/${encodeURIComponent(commandId)}/cancel`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('Command cancelled', 'info');
+    } else {
+      showToast(`Cannot cancel: ${data.error || res.status}`, 'error');
+    }
+    loadDeviceCommands(currentDevice.id);
+  } catch (err) {
+    showToast('Cancel failed: ' + err.message, 'error');
+  }
+};
 
 window.sendSyncFilesCommand = function() {
   if (currentDevice) {
@@ -1523,13 +1777,14 @@ async function loadDeviceCommands(deviceId) {
         // Find latest command of this type
         const latest = cmds.find(c => (c.command_type || c.commandType) === type);
         if (latest) {
-          statusEl.textContent = latest.status;
-          if (latest.status === 'COMPLETED') {
+          const s = String(latest.status || '').toUpperCase();
+          statusEl.textContent = s;
+          if (s === 'COMPLETED') {
             statusEl.style.color = '#34d399'; // green
-          } else if (latest.status === 'FAILED') {
+          } else if (s === 'FAILED' || s === 'REJECTED') {
             statusEl.style.color = '#f87171'; // red
-          } else if (latest.status === 'QUEUED' || latest.status === 'SENDING' || latest.status === 'RECEIVED' || latest.status === 'EXECUTING') {
-            statusEl.innerHTML = `<span style="display: inline-block; animation: pulse-ring 1.5s infinite;">⏳ ${latest.status}</span>`;
+          } else if (s === 'QUEUED' || s === 'PENDING' || s === 'DELIVERED' || s === 'SENT' || s === 'RECEIVED' || s === 'EXECUTING') {
+            statusEl.innerHTML = `<span style="display: inline-block; animation: pulse-ring 1.5s infinite;">⏳ ${s}</span>`;
             statusEl.style.color = '#f59e0b'; // amber
           } else {
             statusEl.style.color = 'var(--text-muted)';
@@ -1549,33 +1804,63 @@ window.fetchCommandHistory = function() {
   }
 };
 
+function statusPill(status) {
+  const s = String(status || '').toUpperCase();
+  let pillClass = 'pill';
+  let icon = '';
+  if (s === 'COMPLETED') { pillClass = 'pill pill-online'; icon = '✓ '; }
+  else if (s === 'FAILED' || s === 'REJECTED') { pillClass = 'pill pill-offline'; icon = '✗ '; }
+  else if (s === 'EXECUTING') { pillClass = 'pill purple'; icon = '⚙ '; }
+  else if (s === 'RECEIVED') { pillClass = 'pill'; icon = '📥 '; }
+  else if (s === 'DELIVERED' || s === 'SENT') { pillClass = 'pill'; icon = '→ '; }
+  else if (s === 'QUEUED' || s === 'PENDING') { pillClass = 'pill'; icon = '⏳ '; }
+  else if (s === 'EXPIRED' || s === 'CANCELLED') { pillClass = 'pill'; icon = '⊘ '; }
+  return `<span class="${pillClass}">${icon}${escapeHtml(s)}</span>`;
+}
+
 function renderCommandLifecycle(cmds) {
   const tbody = document.getElementById('tbody-command-lifecycle');
   if (!tbody) return;
   if (!cmds || cmds.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding: 16px;">No remote commands dispatched yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted" style="padding: 16px;">No remote commands dispatched yet.</td></tr>';
     return;
   }
-  tbody.innerHTML = cmds.slice(0, 20).map(c => {
-    let pillClass = 'pill';
-    if (c.status === 'COMPLETED') pillClass = 'pill pill-online';
-    else if (c.status === 'FAILED') pillClass = 'pill pill-offline';
-    else if (c.status === 'EXECUTING') pillClass = 'pill purple';
-    else if (c.status === 'SENDING' || c.status === 'QUEUED') pillClass = 'pill';
-    
+  tbody.innerHTML = cmds.slice(0, 25).map(c => {
+    const type = c.command_type || c.commandType || '';
+    const status = String(c.status || '').toUpperCase();
+    const created = Number(c.timestamp);
+    const completedTs = Number(c.completion_timestamp || c.completionTimestamp || 0);
+    const createdStr = created ? new Date(created).toLocaleString() : '--';
+    const completedStr = completedTs ? new Date(completedTs).toLocaleString() : '--';
+    const detail = c.result || c.error_message || c.errorMessage || '';
+    const canCancel = (status === 'QUEUED' || status === 'PENDING' || status === 'DELIVERED' || status === 'SENT');
+    const canRetry = (status === 'FAILED' || status === 'EXPIRED' || status === 'REJECTED');
+    const actions = [
+      canCancel ? `<button class="btn btn-sm" style="padding:2px 8px; font-size:0.7rem;" onclick="cancelCommandAction('${escapeHtml(String(c.id || c.commandId))}')">Cancel</button>` : '',
+      canRetry ? `<button class="btn btn-sm" style="padding:2px 8px; font-size:0.7rem;" onclick="retryCommandAction('${escapeHtml(String(c.id || c.commandId))}','${escapeHtml(type)}')">Retry</button>` : ''
+    ].filter(Boolean).join(' ');
     return `
       <tr>
-        <td><b>${escapeHtml(c.command_type || c.commandType || '')}</b></td>
-        <td><span class="${pillClass}">${c.status}</span></td>
-        <td style="font-family: monospace; font-size: 0.8rem;">${escapeHtml(c.device_id || currentDevice?.id || '--')}</td>
-        <td style="font-size: 0.82rem;">${new Date(Number(c.timestamp)).toLocaleTimeString()}</td>
-        <td style="font-size: 0.8rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-          ${escapeHtml(c.result || c.error_message || c.errorMessage || '--')}
+        <td><b>${escapeHtml(commandLabel(type))}</b><div style="font-size:0.68rem; color:var(--text-muted); font-family:monospace;">${escapeHtml(type)}</div></td>
+        <td>${statusPill(status)}</td>
+        <td style="font-family: monospace; font-size: 0.75rem;">${escapeHtml(String(c.id || c.commandId || '--')).slice(0, 18)}</td>
+        <td style="font-size: 0.78rem;">${escapeHtml(createdStr)}${completedTs ? `<br/>→ ${escapeHtml(completedStr)}` : ''}</td>
+        <td style="font-size: 0.78rem; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(detail)}">
+          ${escapeHtml(detail || '--')}
         </td>
+        <td style="white-space: nowrap;">${actions || '--'}</td>
       </tr>
     `;
   }).join('');
 }
+
+window.retryCommandAction = function(commandId, commandType) {
+  if (!currentDevice || !commandType) return;
+  const built = buildCommandParameters(commandType);
+  if (built.cancelled) return;
+  if (built.error) { showToast(built.error, 'error'); return; }
+  dispatchCommand(currentDevice.id, commandType, built.parameters || {});
+};
 
 window.triggerCommandAction = async function(cmdType) {
   if (!currentDevice) {
@@ -1664,9 +1949,9 @@ function renderGeofences(list) {
 }
 
 function drawGeofencesOnMap(list) {
-  if (!consoleMap) return;
+  if (typeof L === 'undefined' || !consoleMapInstance) return;
   geofenceMapCircles.forEach(c => {
-    try { consoleMap.removeLayer(c); } catch (_) {}
+    try { consoleMapInstance.removeLayer(c); } catch (_) {}
   });
   geofenceMapCircles = [];
 
@@ -1677,7 +1962,7 @@ function drawGeofencesOnMap(list) {
         fillColor: '#38bdf8',
         fillOpacity: 0.15,
         radius: Number(g.radius_meters) || 500
-      }).addTo(consoleMap);
+      }).addTo(consoleMapInstance);
       circle.bindPopup(`<b>${escapeHtml(g.name)}</b><br>Radius: ${g.radius_meters}m`);
       geofenceMapCircles.push(circle);
     }
@@ -1770,20 +2055,100 @@ async function loadDeviceRecordings(deviceId) {
     if (!res.ok) return;
     const recs = await res.json();
     const container = document.getElementById('recordings-list');
-    if (recs.length === 0) {
+    const audioRecs = recs.filter(r => (r.media_kind || 'audio') !== 'video');
+    if (audioRecs.length === 0) {
       container.innerHTML = '<div class="empty-state">No audio diagnostic recordings available.</div>';
       return;
     }
-    container.innerHTML = recs.map(r => `
+    // Uploaded media requires an Authorization header — render blob URLs.
+    const rendered = await Promise.all(audioRecs.map(async (r) => {
+      const blobUrl = await fetchAuthedBlobUrl(r.file_path);
+      return `
       <div style="background: var(--bg-surface); padding: 14px; border-radius: 8px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
         <div>
           <div style="font-weight: 600;">${escapeHtml(r.file_name)}</div>
-          <div style="font-size: 0.78rem; color: var(--text-muted);">${new Date(r.created_at).toLocaleString()} • ${(r.duration_ms / 1000).toFixed(1)}s</div>
+          <div style="font-size: 0.78rem; color: var(--text-muted);">${new Date(r.created_at).toLocaleString()} • ${((r.duration_ms || 0) / 1000).toFixed(1)}s</div>
         </div>
-        <audio controls src="${r.file_path}" style="height: 36px;"></audio>
-      </div>
-    `).join('');
+        ${blobUrl
+          ? `<audio controls src="${blobUrl}" style="height: 36px;"></audio>`
+          : '<span style="color: var(--text-muted); font-size: 0.78rem;">Preview unavailable</span>'}
+      </div>`;
+    }));
+    container.innerHTML = rendered.join('');
   } catch (_) {}
+}
+
+// ---- Screenshots & screen recordings (Command Center media panels) ----------
+async function loadDeviceScreenshots(deviceId) {
+  const container = document.getElementById('screenshots-list');
+  if (!container) return;
+  container.innerHTML = '<div class="empty-state">Loading screenshots…</div>';
+  try {
+    const res = await fetch(`/api/devices/${deviceId}/screenshots`, {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (!res.ok) {
+      container.innerHTML = `<div class="empty-state">Could not load screenshots (${escapeHtml(String(res.status))}).</div>`;
+      return;
+    }
+    const shots = await res.json();
+    if (!shots.length) {
+      container.innerHTML = '<div class="empty-state">No screenshots yet. Use “Capture Screen” — the device user must authorize screen capture when prompted.</div>';
+      return;
+    }
+    const cards = await Promise.all(shots.slice(0, 12).map(async (s) => {
+      const blobUrl = await fetchAuthedBlobUrl(s.file_path);
+      const when = new Date(s.created_at).toLocaleString();
+      return `
+        <figure style="margin:0; background: var(--bg-surface); border-radius: 8px; overflow: hidden;">
+          ${blobUrl
+            ? `<img src="${blobUrl}" alt="Screenshot ${escapeHtml(when)}" style="width:100%; height:140px; object-fit:cover; cursor:pointer;" onclick="openMediaPreview('${escapeHtml(s.file_name)}','${escapeHtml(s.file_path)}','${Number(s.size_bytes) || 0}','image/png')" />`
+            : '<div style="height:140px; display:flex; align-items:center; justify-content:center; color:var(--text-muted);">Preview unavailable</div>'}
+          <figcaption style="padding: 6px 8px; font-size: 0.68rem; color: var(--text-muted);">
+            ${escapeHtml(s.kind || 'screenshot')} • ${escapeHtml(when)}${s.width ? ` • ${Number(s.width)}×${Number(s.height)}` : ''}
+          </figcaption>
+        </figure>`;
+    }));
+    container.innerHTML = `<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px;">${cards.join('')}</div>`;
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state">Failed to load screenshots.</div>';
+  }
+}
+
+async function loadDeviceVideos(deviceId) {
+  const container = document.getElementById('videos-list');
+  if (!container) return;
+  container.innerHTML = '<div class="empty-state">Loading recordings…</div>';
+  try {
+    const res = await fetch(`/api/devices/${deviceId}/videos`, {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (!res.ok) {
+      container.innerHTML = `<div class="empty-state">Could not load recordings (${escapeHtml(String(res.status))}).</div>`;
+      return;
+    }
+    const vids = await res.json();
+    if (!vids.length) {
+      container.innerHTML = '<div class="empty-state">No screen recordings yet. Start one with “Start Recording” — the device user must authorize screen capture when prompted.</div>';
+      return;
+    }
+    const cards = await Promise.all(vids.slice(0, 10).map(async (v) => {
+      const blobUrl = await fetchAuthedBlobUrl(v.file_path);
+      const when = new Date(v.created_at).toLocaleString();
+      return `
+        <div style="background: var(--bg-surface); border-radius: 8px; padding: 12px;">
+          <div style="font-weight:600; font-size: 0.85rem; margin-bottom: 4px;">${escapeHtml(v.file_name)}</div>
+          <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">${escapeHtml(when)} • ${((v.duration_ms || 0) / 1000).toFixed(1)}s${v.size_bytes ? ` • ${(Number(v.size_bytes) / (1024 * 1024)).toFixed(1)} MB` : ''}</div>
+          ${blobUrl
+            ? `<video controls preload="metadata" src="${blobUrl}" style="width:100%; max-height:220px; border-radius:6px; background:#000;"></video>
+               <button class="btn btn-sm" style="margin-top:8px;" onclick="downloadMediaFile('${escapeHtml(v.file_path)}','${escapeHtml(v.file_name)}')">⬇ Download</button>`
+            : '<div style="color:var(--text-muted); font-size:0.78rem;">Preview unavailable</div>'}
+        </div>`;
+    }));
+    container.innerHTML = `<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">${cards.join('')}</div>`;
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state">Failed to load recordings.</div>';
+  }
 }
 
 // Global caching for local search filtering
@@ -2039,40 +2404,46 @@ async function loadDeviceFiles(deviceId) {
           const icon = isDir ? '📁' : '📄';
           const sizeStr = isDir ? '--' : formatBytes(Number(f.file_size));
           const dateStr = f.created_at ? new Date(f.created_at).toLocaleString() : 'N/A';
-          
+
+          // Values travel via HTML-escaped data-* attributes and are handled by
+          // addEventListener — never interpolated into inline JS (XSS sink fix).
+          const dataAttrs = `data-path="${escapeHtml(f.file_path || '')}" data-name="${escapeHtml(f.file_name || '')}" data-mime="${escapeHtml(f.mime_type || '')}" data-size="${escapeHtml(sizeStr)}"`;
+
           let actionHtml = '--';
           if (!isDir) {
-            const pathEsc = escapeJs(f.file_path);
-            const nameEsc = escapeJs(f.file_name);
             const mime = f.mime_type || '';
-            const sizeStrEsc = escapeJs(sizeStr);
-            
             const isMedia = mime.startsWith('image/') || mime.startsWith('video/') || /\.(jpg|jpeg|png|gif|mp4|mov)$/i.test(f.file_name);
-            
+
             actionHtml = `
               <div style="display: flex; gap: 6px;">
-                ${isMedia ? `<button class="btn btn-secondary btn-sm" style="padding: 3px 8px; font-size: 0.72rem;" onclick="openMediaPreview('${nameEsc}', '${pathEsc}', '${sizeStrEsc}', '${escapeJs(mime)}')">👁️ Preview</button>` : ''}
-                <button class="btn btn-primary btn-sm" style="padding: 3px 8px; font-size: 0.72rem; background: var(--cyan); border-color: var(--cyan);" onclick="downloadMediaFile('${pathEsc}', '${nameEsc}')">📥 Download</button>
+                ${isMedia ? `<button class="btn btn-secondary btn-sm file-preview-btn" style="padding: 3px 8px; font-size: 0.72rem;" data-action="preview-file" ${dataAttrs}>👁️ Preview</button>` : ''}
+                <button class="btn btn-primary btn-sm file-download-btn" style="padding: 3px 8px; font-size: 0.72rem; background: var(--cyan); border-color: var(--cyan);" data-action="download-file" ${dataAttrs}>📥 Download</button>
               </div>
             `;
           }
-          
-          const clickHandler = isDir ? `style="cursor: pointer; background: rgba(6,182,212,0.02);" onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)"` : '';
-          
+
+          const rowAttrs = isDir ? `style="cursor: pointer; background: rgba(6,182,212,0.02);" data-action="open-dir" ${dataAttrs}` : '';
+
           return `
-            <tr ${clickHandler} class="file-row-${isDir ? 'dir' : 'file'}">
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${icon}</td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}><b style="${isDir ? 'color: var(--cyan); text-decoration: underline;' : ''}">${escapeHtml(f.file_name)}</b></td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''} style="font-family: monospace; font-size: 0.8rem; opacity: 0.8;">${escapeHtml(f.file_path)}</td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${sizeStr}</td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${dateStr}</td>
+            <tr ${rowAttrs} class="file-row-${isDir ? 'dir' : 'file'}">
+              <td>${icon}</td>
+              <td><b style="${isDir ? 'color: var(--cyan); text-decoration: underline;' : ''}">${escapeHtml(f.file_name)}</b></td>
+              <td style="font-family: monospace; font-size: 0.8rem; opacity: 0.8;">${escapeHtml(f.file_path)}</td>
+              <td>${escapeHtml(sizeStr)}</td>
+              <td>${escapeHtml(dateStr)}</td>
               <td>${actionHtml}</td>
             </tr>
           `;
         }).join('');
       }
-      
+
       tbody.innerHTML = rowsHtml;
+
+      wireActions(tbody, {
+        'open-dir': (data) => { window.currentDirectoryPath = data.path; window.renderFilesTable(); },
+        'preview-file': (data) => openMediaPreview(data.name, data.path, data.size, data.mime),
+        'download-file': (data) => downloadMediaFile(data.path, data.name)
+      });
     };
     
     window.navigateFileSystemTo = function(path, event) {
@@ -2102,17 +2473,14 @@ async function loadDeviceFiles(deviceId) {
     } else {
       galleryContainer.innerHTML = mediaFiles.map(f => {
         const isVideo = (f.mime_type || '').toLowerCase().startsWith('video/') || f.file_name.endsWith('.mp4');
-        const pathEsc = escapeJs(f.file_path);
-        const nameEsc = escapeJs(f.file_name);
         const sizeStr = formatBytes(Number(f.file_size));
-        const sizeStrEsc = escapeJs(sizeStr);
-        const mimeEsc = escapeJs(f.mime_type || '');
-        
+        const dataAttrs = `data-path="${escapeHtml(f.file_path || '')}" data-name="${escapeHtml(f.file_name || '')}" data-mime="${escapeHtml(f.mime_type || '')}" data-size="${escapeHtml(sizeStr)}"`;
+
         return `
-          <div class="stat-card" style="padding: 12px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; min-height: 160px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; text-align: center; cursor: pointer; transition: all 0.2s;" onclick="openMediaPreview('${nameEsc}', '${pathEsc}', '${sizeStrEsc}', '${mimeEsc}')">
+          <div class="stat-card" data-action="preview-file" ${dataAttrs} style="padding: 12px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; min-height: 160px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; text-align: center; cursor: pointer; transition: all 0.2s;">
             <div style="font-size: 2.6rem; margin-bottom: 8px; transition: transform 0.2s;">${isVideo ? '🎬' : '🖼️'}</div>
             <div style="font-size: 0.82rem; font-weight: bold; word-break: break-all; margin-bottom: 4px; max-height: 40px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">${escapeHtml(f.file_name)}</div>
-            <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">${sizeStr}</div>
+            <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">${escapeHtml(sizeStr)}</div>
             <div style="display: flex; gap: 4px; width: 100%; justify-content: center;">
               <span class="btn btn-secondary btn-sm" style="padding: 2px 6px; font-size: 0.65rem; pointer-events: none;">👁️ Preview</span>
               <span class="btn btn-primary btn-sm" style="padding: 2px 6px; font-size: 0.65rem; background: var(--cyan); border-color: var(--cyan); pointer-events: none;">📥 Download</span>
@@ -2120,6 +2488,10 @@ async function loadDeviceFiles(deviceId) {
           </div>
         `;
       }).join('');
+
+      wireActions(galleryContainer, {
+        'preview-file': (data) => openMediaPreview(data.name, data.path, data.size, data.mime)
+      });
     }
   } catch (err) {
     console.error('Error loading files:', err);
@@ -2136,57 +2508,108 @@ function formatBytes(bytes) {
 }
 
 // Service Health loader
+// Truthful model: (1) dashboard live-sync = our own WS; (2) device link =
+// the device's socket presence + last-seen from the server; (3) agent service
+// states come from /service-health (real fields, not invented ones).
 async function loadDeviceHealth(deviceId) {
-  const wsStatus = ws && ws.readyState === WebSocket.OPEN ? 'CONNECTED' : 'OFFLINE';
-  const wsPill = document.getElementById('health-ws-status');
-  if (wsPill) {
-    wsPill.textContent = wsStatus;
-    wsPill.style.color = wsStatus === 'CONNECTED' ? '#22c55e' : '#f43f5e';
-  }
+  const dashWsStatus = ws && ws.readyState === WebSocket.OPEN ? 'CONNECTED' : 'OFFLINE';
 
   const srvWs = document.getElementById('status-srv-ws');
   if (srvWs) {
-    srvWs.textContent = wsStatus === 'CONNECTED' ? 'Active' : 'Offline';
-    srvWs.className = `pill ${wsStatus === 'CONNECTED' ? 'pill-online' : 'pill-offline'}`;
+    srvWs.textContent = dashWsStatus === 'CONNECTED' ? 'Active' : 'Offline';
+    srvWs.className = `pill ${dashWsStatus === 'CONNECTED' ? 'pill-online' : 'pill-offline'}`;
   }
 
   try {
-    const res = await fetch(`/api/devices/${deviceId}/health`, {
+    const res = await fetch(`/api/devices/${deviceId}/service-health`, {
       headers: { 'Authorization': `Bearer ${authToken}` }
     });
     if (res.ok) {
-      const healthData = await res.json();
-      if (healthData && healthData.length > 0) {
-        const latest = healthData[0];
-        const srvNotif = document.getElementById('status-srv-notif');
-        if (srvNotif) {
-          srvNotif.textContent = latest.notification_service === 'RUNNING' ? 'Running' : (latest.notification_service || 'Disabled');
-          srvNotif.className = `pill ${latest.notification_service === 'RUNNING' ? 'pill-online' : 'pill-offline'}`;
-        }
-        const srvGps = document.getElementById('status-srv-gps');
-        if (srvGps) {
-          srvGps.textContent = latest.location_service === 'RUNNING' ? 'Running' : (latest.location_service || 'Idle');
-          srvGps.className = `pill ${latest.location_service === 'RUNNING' ? 'pill-online' : 'pill-offline'}`;
-        }
-        const srvTelem = document.getElementById('status-srv-telemetry');
-        if (srvTelem) {
-          srvTelem.textContent = latest.telemetry_service === 'RUNNING' ? 'Running' : (latest.telemetry_service || 'Active');
-          srvTelem.className = `pill ${latest.telemetry_service === 'RUNNING' ? 'pill-online' : 'pill-offline'}`;
+      const health = await res.json();
+
+      // Device WebSocket transport = the DEVICE's link, not the dashboard's.
+      const deviceOnline = !!health.deviceConnected;
+      const wsPill = document.getElementById('health-ws-status');
+      if (wsPill) {
+        wsPill.textContent = deviceOnline ? 'Connected' : 'Offline';
+        wsPill.style.color = deviceOnline ? '#22c55e' : '#f43f5e';
+      }
+
+      const setPill = (id, value, runningLabel) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const running = value === 'RUNNING';
+        el.textContent = running ? runningLabel : (value || 'Unknown');
+        el.className = `pill ${running ? 'pill-online' : 'pill-offline'}`;
+      };
+      setPill('status-srv-notif', health.notificationMonitor, 'Running');
+      setPill('status-srv-gps', health.locationService, 'Running');
+      setPill('status-srv-telemetry', health.telemetryCollector, 'Running');
+
+      const listContainer = document.getElementById('health-heartbeat-log');
+      if (listContainer) {
+        const time = new Date().toLocaleString();
+        const lastSeenStr = health.lastSeen ? new Date(health.lastSeen).toLocaleString() : 'never';
+        listContainer.replaceChildren();
+        const lines = [
+          `[${time}] [DEVICE LINK] Device socket: ${deviceOnline ? 'CONNECTED' : 'OFFLINE'} • last seen: ${lastSeenStr}`,
+          `[${time}] [DASHBOARD SYNC] Dashboard WebSocket: ${dashWsStatus}`,
+          `[${time}] [AGENT SERVICES] notifications=${health.notificationMonitor || 'UNKNOWN'} location=${health.locationService || 'UNKNOWN'} telemetry=${health.telemetryCollector || 'UNKNOWN'}`
+        ];
+        for (const line of lines) {
+          const div = document.createElement('div');
+          div.textContent = line;
+          listContainer.appendChild(div);
         }
       }
     }
   } catch (_) {}
-
-  const listContainer = document.getElementById('health-heartbeat-log');
-  if (listContainer) {
-    const time = new Date().toLocaleString();
-    listContainer.innerHTML = `
-      <div>[${time}] [WS UPLINK] WebSocket state: <b>${wsStatus}</b></div>
-      <div>[${time}] [API HEALTH] Base URL and gateway sync validated</div>
-      <div>[${time}] [CLIENT DIAGNOSTICS] Device online: <b>${currentDevice && currentDevice.status === 'ONLINE' ? 'YES' : 'NO'}</b></div>
-    `;
-  }
 }
+
+// Overview "System health" card — bound to real state (F-16).
+async function updateSystemHealth() {
+  let apiOk = false;
+  let dbMode = 'unknown';
+  let activeDevices = 0;
+  try {
+    const res = await fetch('/api/health');
+    if (res.ok) {
+      const h = await res.json();
+      apiOk = h.status === 'healthy';
+      dbMode = h.postgres ? 'postgres' : 'embedded';
+      activeDevices = h.activeDevices || 0;
+    }
+  } catch (_) {}
+
+  const wsOk = ws && ws.readyState === WebSocket.OPEN;
+
+  const setTxt = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  const setDot = (id, ok) => {
+    const el = document.getElementById(id);
+    if (el) el.style.color = ok ? '#34d399' : '#f87171';
+  };
+
+  const healthy = apiOk && wsOk;
+  setTxt('health-badge-status', healthy ? '● LIVE' : '● DEGRADED');
+  setTxt('health-score-val', healthy ? '100' : (apiOk ? '60' : '20'));
+  setTxt('health-summary-txt', healthy ? 'Everything looks good' : 'Attention required');
+  setTxt('health-sub-txt', healthy
+    ? 'All backend services & telemetry streams are connected.'
+    : (!apiOk ? 'API unreachable from this browser.' : 'Live updates disconnected — retrying…'));
+  setTxt('health-api-val', apiOk ? 'Operational' : 'Unavailable');
+  setTxt('health-db-val', dbMode === 'postgres' ? 'PostgreSQL' : (dbMode === 'embedded' ? 'Embedded (in-memory)' : 'Unknown'));
+  setTxt('health-sync-val', wsOk ? 'Active' : 'Disconnected');
+  setDot('health-sync-dot', wsOk);
+
+  // Attention = offline/enrolled-but-not-connected devices
+  const attention = allDevices.filter(d => d.status !== 'ONLINE').length;
+  setTxt('stat-attention-devices', String(attention));
+}
+
+window.refreshOverview = function() {
+  loadDevices().then(() => updateSystemHealth());
+  showToast('Overview refreshed');
+};
 
 // Audit Logs
 async function loadAuditLogs() {
@@ -2664,7 +3087,26 @@ function formatUptime(millis) {
   return `${hours}h ${mins}m`;
 }
 
-// // Media Preview Lightbox Controller
+// Media Preview Lightbox Controller
+// XSS-safe: user-controlled values are only ever set via textContent / element
+// properties, never interpolated into HTML or inline handlers.
+function safeMediaUrl(url) {
+  if (typeof url !== 'string') return null;
+  if (url.startsWith('blob:')) return url;
+  if (/^data:(image|video|audio)\//i.test(url)) return url;
+  if (url.startsWith('/uploads/') && !url.includes('..') && !url.includes('\\')) return url;
+  return null;
+}
+
+async function fetchAuthedBlobUrl(url) {
+  // Uploaded files require an Authorization header — fetch then use blob URLs.
+  if (!url.startsWith('/uploads/')) return url;
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${authToken}` } });
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
 window.openMediaPreview = async function(name, path, sizeStr, mime) {
   const lightbox = document.getElementById('media-lightbox');
   const title = document.getElementById('lightbox-title');
@@ -2672,33 +3114,33 @@ window.openMediaPreview = async function(name, path, sizeStr, mime) {
   const pathLabel = document.getElementById('lightbox-file-path');
   const previewContainer = document.getElementById('lightbox-content-preview');
   const downloadBtn = document.getElementById('lightbox-download-btn');
-  
+
   if (!lightbox) return;
-  
-  title.textContent = name;
+
+  title.textContent = name || 'File';
   size.textContent = sizeStr || 'Unknown Size';
-  pathLabel.textContent = path;
-  
-  previewContainer.innerHTML = '';
-  
-  const isVideo = mime.startsWith('video/') || path.endsWith('.mp4') || path.endsWith('.mov');
-  
-  // Resolve actual asset URL (fallback to placeholder if it is an un-synced phone local storage path)
-  let actualUrl = path;
-  
-  if (!path.startsWith('/uploads/') && !path.startsWith('http') && !path.startsWith('blob:')) {
-    // Check if we have the file synced on the server
+  pathLabel.textContent = path || '';
+  previewContainer.replaceChildren();
+
+  const mimeStr = typeof mime === 'string' ? mime : '';
+  const pathStr = typeof path === 'string' ? path : '';
+  const isVideo = mimeStr.startsWith('video/') || /\.(mp4|mov)$/i.test(pathStr);
+
+  // Resolve the actual asset URL (blob:/data:/uploads only — reject schemes
+  // like javascript: or external origins).
+  let actualUrl = safeMediaUrl(pathStr);
+
+  if (pathStr && !actualUrl && !pathStr.startsWith('http') && !pathStr.startsWith('blob:')) {
+    // Device-local path: check whether the server has a streamed copy.
     try {
       const checkRes = await fetch(`/api/devices/${currentDevice.id}/files`, {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
       if (checkRes.ok) {
         const files = await checkRes.json();
-        const fileEntry = files.find(f => f.file_path === path);
+        const fileEntry = files.find(f => f.file_path === pathStr);
         if (fileEntry && fileEntry.web_path) {
-          actualUrl = fileEntry.web_path;
-        } else {
-          actualUrl = null;
+          actualUrl = safeMediaUrl(fileEntry.web_path);
         }
       }
     } catch (e) {
@@ -2706,29 +3148,48 @@ window.openMediaPreview = async function(name, path, sizeStr, mime) {
     }
   }
 
+  if (actualUrl) {
+    actualUrl = await fetchAuthedBlobUrl(actualUrl);
+  }
+
   if (!actualUrl) {
-    // Show high-tech loading & remote pull interface
-    previewContainer.innerHTML = `
-      <div id="media-pull-loader" style="padding: 40px; text-align: center; color: var(--cyan); width: 100%;">
-        <div style="font-size: 3rem; margin-bottom: 12px; animation: pulse 1.5s infinite;">⚡</div>
-        <h4 style="margin: 0 0 4px 0; color: #fff;">File Available on Remote Device</h4>
-        <p style="font-size: 0.78rem; color: var(--text-muted); max-width: 320px; margin: 0 auto 15px auto;">
-          This file is located on the remote Android storage. Tap below to stream and preview it online.
-        </p>
-        <button id="btn-pull-preview" class="btn btn-primary btn-sm" style="background: var(--cyan); border-color: var(--cyan); font-weight: 500;">👁️ Stream File Now</button>
-      </div>
-    `;
-    
+    // Remote pull interface — DOM-built (no innerHTML with user data).
+    const loader = document.createElement('div');
+    loader.className = 'media-pull-loader';
+    loader.style.cssText = 'padding: 40px; text-align: center; color: var(--cyan); width: 100%;';
+
+    const icon = document.createElement('div');
+    icon.style.cssText = 'font-size: 3rem; margin-bottom: 12px; animation: pulse 1.5s infinite;';
+    icon.textContent = '⚡';
+    const heading = document.createElement('h4');
+    heading.style.cssText = 'margin: 0 0 4px 0; color: #fff;';
+    heading.textContent = 'File Available on Remote Device';
+    const desc = document.createElement('p');
+    desc.style.cssText = 'font-size: 0.78rem; color: var(--text-muted); max-width: 320px; margin: 0 auto 15px auto;';
+    desc.textContent = 'This file is located on the remote Android storage. Tap below to stream and preview it online.';
+    const pullBtn = document.createElement('button');
+    pullBtn.id = 'btn-stream-file';
+    pullBtn.className = 'btn btn-primary btn-sm';
+    pullBtn.style.cssText = 'background: var(--cyan); border-color: var(--cyan); font-weight: 500;';
+    pullBtn.textContent = '👁️ Stream File Now';
+
+    loader.append(icon, heading, desc, pullBtn);
+    previewContainer.appendChild(loader);
     lightbox.classList.remove('hidden');
-    
-    document.getElementById('btn-pull-preview').addEventListener('click', async () => {
-      const loader = document.getElementById('media-pull-loader');
-      loader.innerHTML = `
-        <div class="loader" style="margin: 0 auto 15px auto;"></div>
-        <h4 style="margin: 0 0 4px 0; color: #fff;">Streaming from Device...</h4>
-        <p style="font-size: 0.78rem; color: var(--text-muted);">Please keep the device connection active.</p>
-      `;
-      
+
+    pullBtn.addEventListener('click', async () => {
+      loader.replaceChildren();
+      const spin = document.createElement('div');
+      spin.className = 'loader';
+      spin.style.cssText = 'margin: 0 auto 15px auto;';
+      const h = document.createElement('h4');
+      h.style.cssText = 'margin: 0 0 4px 0; color: #fff;';
+      h.textContent = 'Streaming from Device...';
+      const p = document.createElement('p');
+      p.style.cssText = 'font-size: 0.78rem; color: var(--text-muted);';
+      p.textContent = 'Please keep the device connection active.';
+      loader.append(spin, h, p);
+
       try {
         const dispatchRes = await fetch(`/api/devices/${currentDevice.id}/commands`, {
           method: 'POST',
@@ -2738,65 +3199,80 @@ window.openMediaPreview = async function(name, path, sizeStr, mime) {
           },
           body: JSON.stringify({
             commandType: 'UPLOAD_FILE',
-            parameters: { path: path }
+            parameters: { path: pathStr }
           })
         });
-        
+
+        const dispatchData = await dispatchRes.json().catch(() => ({}));
         if (dispatchRes.ok) {
+          if (!dispatchData.dispatchedToOnlineDevice) {
+            showToast('Device offline — stream request queued; try again when the device is connected', 'warning');
+          }
           let attempts = 0;
           const interval = setInterval(async () => {
             attempts++;
             if (attempts > 15) {
               clearInterval(interval);
-              loader.innerHTML = `
-                <div style="font-size: 3rem; margin-bottom: 12px; color: var(--danger);">⚠️</div>
-                <h4 style="margin: 0 0 4px 0; color: #fff;">Streaming Timed Out</h4>
-                <p style="font-size: 0.78rem; color: var(--text-muted);">Please check if the device is active and retry.</p>
-              `;
+              loader.replaceChildren();
+              const warn = document.createElement('div');
+              warn.style.cssText = 'font-size: 3rem; margin-bottom: 12px; color: var(--danger);';
+              warn.textContent = '⚠️';
+              const wh = document.createElement('h4');
+              wh.style.cssText = 'margin: 0 0 4px 0; color: #fff;';
+              wh.textContent = 'Streaming Timed Out';
+              const wp = document.createElement('p');
+              wp.style.cssText = 'font-size: 0.78rem; color: var(--text-muted);';
+              wp.textContent = 'Please check if the device is active and retry.';
+              loader.append(warn, wh, wp);
               return;
             }
-            
+
             const checkRes = await fetch(`/api/devices/${currentDevice.id}/files`, {
               headers: { 'Authorization': `Bearer ${authToken}` }
             });
             if (checkRes.ok) {
               const files = await checkRes.json();
-              const fileEntry = files.find(f => f.file_path === path);
+              const fileEntry = files.find(f => f.file_path === pathStr);
               if (fileEntry && fileEntry.web_path) {
                 clearInterval(interval);
-                showToast(`File streamed successfully!`);
-                openMediaPreview(name, fileEntry.web_path, sizeStr, mime);
+                showToast('File streamed successfully!');
+                openMediaPreview(name, fileEntry.web_path, sizeStr, mimeStr);
               }
             }
           }, 800);
         } else {
-          showToast("Failed to dispatch pull command.");
+          showToast('Failed to dispatch pull command.', 'error');
         }
       } catch (err) {
-        showToast("Error pulling media.");
+        showToast('Error pulling media.', 'error');
       }
     });
     return;
   }
-  
+
   if (isVideo) {
-    previewContainer.innerHTML = `
-      <video controls autoplay style="max-height: 340px; width: 100%; border-radius: 4px;">
-        <source src="${actualUrl}" type="${mime || 'video/mp4'}">
-        Your browser does not support the video tag.
-      </video>
-    `;
+    const video = document.createElement('video');
+    video.controls = true;
+    video.autoplay = true;
+    video.style.cssText = 'max-height: 340px; width: 100%; border-radius: 4px;';
+    video.src = actualUrl;
+    previewContainer.appendChild(video);
   } else {
-    previewContainer.innerHTML = `
-      <img src="${actualUrl}" style="max-height: 340px; max-width: 100%; object-fit: contain; border-radius: 4px;" onerror="this.src='https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=640&auto=format&fit=crop';">
-    `;
+    const img = document.createElement('img');
+    img.style.cssText = 'max-height: 340px; max-width: 100%; object-fit: contain; border-radius: 4px;';
+    img.alt = name || 'File preview';
+    img.addEventListener('error', () => {
+      img.alt = 'Preview unavailable';
+    });
+    img.src = actualUrl;
+    previewContainer.appendChild(img);
   }
-  
+
   downloadBtn.onclick = (e) => {
     e.preventDefault();
-    downloadMediaFile(actualUrl, name);
+    downloadMediaFile(actualUrl.startsWith('blob:') ? pathStr : actualUrl, name);
   };
-  
+
   lightbox.classList.remove('hidden');
 };
 
@@ -2813,11 +3289,27 @@ window.closeMediaLightbox = function() {
 
 window.downloadMediaFile = async function(path, name) {
   if (!currentDevice) return;
-  
-  if (path.startsWith('/uploads/') || path.startsWith('http') || path.startsWith('blob:')) {
+
+  const safeUrl = safeMediaUrl(path);
+  if (path.startsWith('/uploads/') || (safeUrl && (safeUrl.startsWith('blob:') || safeUrl.startsWith('data:')))) {
+    // Uploaded files are behind auth — fetch with the token, then save the blob.
+    let href = safeUrl;
+    if (path.startsWith('/uploads/')) {
+      try {
+        const res = await fetch(path, { headers: { 'Authorization': `Bearer ${authToken}` } });
+        if (!res.ok) {
+          showToast('Download failed: not authorized or file missing', 'error');
+          return;
+        }
+        href = URL.createObjectURL(await res.blob());
+      } catch (e) {
+        showToast('Download failed', 'error');
+        return;
+      }
+    }
     const link = document.createElement('a');
-    link.href = path;
-    link.setAttribute('download', name || 'file');
+    link.href = href;
+    link.setAttribute('download', String(name || 'file').replace(/[\/:*?"<>|]/g, '_'));
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

