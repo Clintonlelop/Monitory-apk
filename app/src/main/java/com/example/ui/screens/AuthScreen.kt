@@ -254,7 +254,7 @@ fun AuthScreen(
                         singleLine = true,
                         supportingText = {
                             Text(
-                                text = "Pre-configured password: admin123",
+                                text = "Use the password for your management account",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary
                             )

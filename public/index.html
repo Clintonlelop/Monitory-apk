@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <!-- Leaflet Map CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -26,11 +26,11 @@
       <form id="login-form">
         <div class="form-group">
           <label>Email or Username</label>
-          <input type="text" id="login-email" value="clintonumelo15@gmail.com" placeholder="e.g. clintonumelo15@gmail.com" required autocomplete="username" />
+          <input type="text" id="login-email" placeholder="you@example.com" required autocomplete="username" />
         </div>
         <div class="form-group">
           <label>Password</label>
-          <input type="password" id="login-password" value="admin123" placeholder="Enter your password" required autocomplete="current-password" />
+          <input type="password" id="login-password" placeholder="Enter your password" required autocomplete="current-password" />
         </div>
         <button type="submit" id="btn-login-submit" class="primary" style="width: 100%; margin-top: 10px; padding: 12px; font-size: 12px;">
           Sign In to Workspace
@@ -39,9 +39,7 @@
           <a href="#" id="toggle-auth-mode" style="font-size: 11px; color: var(--accent); text-decoration: none; font-weight: 600;">New account? Click to Register</a>
         </div>
         <div id="login-error-msg" style="color: #f43f5e; background: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.2); border-radius: 8px; padding: 10px 14px; font-size: 11px; margin-top: 12px; display: none; text-align: center;"></div>
-        <p class="auth-hint">
-          Default Account: <b>clintonumelo15@gmail.com</b> / <b>admin123</b>
-        </p>
+          <p style="font-size: 10px; color: var(--muted);">Use your workspace credentials. First run? Ask your administrator to bootstrap the account.</p>
       </form>
     </div>
   </div>
@@ -658,7 +656,7 @@
           <div id="files-breadcrumb" style="font-family: monospace; font-size: 11px; color: var(--muted);">/storage/emulated/0</div>
           <div style="display: flex; gap: 8px; align-items: center;">
             <span id="media-pull-loader" style="font-size: 10px; color: var(--accent); display: none;">Fetching file stream...</span>
-            <button id="btn-pull-preview" class="secondary" style="margin: 0; width: auto; padding: 8px 14px;">Refresh Files</button>
+            <button id="btn-refresh-files" class="secondary" style="margin: 0; width: auto; padding: 8px 14px;">Refresh Files</button>
           </div>
         </div>
         <div class="panel" style="padding: 20px; margin-bottom: 20px;">
@@ -1068,7 +1066,7 @@
   <div id="toast" role="status"></div>
 
   <!-- Leaflet JS -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/vendor/leaflet/leaflet.js"></script>
   <!-- Main Dashboard App Script -->
   <script src="/app.js"></script>
 </body>

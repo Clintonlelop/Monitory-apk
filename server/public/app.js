@@ -206,9 +206,25 @@ function setupAuth() {
 
 function initDashboard() {
   connectWebSocket();
-  loadDevices();
+  loadDevices().then(() => updateSystemHealth());
   loadAuditLogs();
   loadAlerts();
+
+  // "Refresh Files" in the File Explorer panel (previously a dead duplicate id)
+  const refreshFilesBtn = document.getElementById('btn-refresh-files');
+  if (refreshFilesBtn) {
+    refreshFilesBtn.addEventListener('click', () => {
+      if (currentDevice) {
+        loadDeviceFiles(currentDevice.id);
+        showToast('Refreshing file list…');
+      } else {
+        showToast('Open a device first', 'warning');
+      }
+    });
+  }
+
+  // Keep the health card current even when no WS events arrive.
+  setInterval(updateSystemHealth, 30000);
 }
 
 // Navigation
@@ -271,18 +287,24 @@ function showView(viewName) {
 // WebSocket Live Real-Time Connection
 function connectWebSocket() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${location.host}/ws/dashboard`;
+  const wsUrl = `${protocol}//${location.host}/ws/dashboard?token=${encodeURIComponent(authToken || '')}`;
 
   ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
-    document.getElementById('ws-status-text').textContent = 'Live Synced';
-    document.querySelector('.pulse-dot').style.background = '#10b981';
+    const el = document.getElementById('ws-status-text');
+    if (el) el.textContent = 'Live Synced';
+    const dot = document.querySelector('.pulse-dot');
+    if (dot) dot.style.background = '#10b981';
+    if (typeof updateSystemHealth === 'function') updateSystemHealth();
   };
 
   ws.onclose = () => {
-    document.getElementById('ws-status-text').textContent = 'Disconnected';
-    document.querySelector('.pulse-dot').style.background = '#ef4444';
+    const el = document.getElementById('ws-status-text');
+    if (el) el.textContent = 'Disconnected';
+    const dot = document.querySelector('.pulse-dot');
+    if (dot) dot.style.background = '#ef4444';
+    if (typeof updateSystemHealth === 'function') updateSystemHealth();
     setTimeout(connectWebSocket, 3000);
   };
 
@@ -294,17 +316,25 @@ function connectWebSocket() {
   };
 }
 
+let _loadDevicesTimer = null;
+function scheduleDevicesRefresh() {
+  clearTimeout(_loadDevicesTimer);
+  _loadDevicesTimer = setTimeout(() => {
+    loadDevices().then(() => updateSystemHealth());
+  }, 400);
+}
+
 function handleWsMessage(msg) {
   resetHeartbeatTime();
   if (msg.type === 'DEVICE_STATUS_CHANGED') {
     updateDeviceStatusInUi(msg.deviceId, msg.status);
-    loadDevices();
+    scheduleDevicesRefresh();
     pushConsoleTimeline('SYSTEM', 'Device Status Transition', `Device is now ${msg.status}`, msg.status === 'ONLINE' ? 'success' : 'error');
   } else if (msg.type === 'DEVICE_TELEMETRY_UPDATED') {
     if (currentDevice && currentDevice.id === msg.deviceId) {
       applyTelemetry(msg.telemetry);
     }
-    loadDevices();
+    scheduleDevicesRefresh();
     const bLevel = msg.telemetry ? (msg.telemetry.battery_level !== undefined ? msg.telemetry.battery_level : msg.telemetry.batteryLevel) : 0;
     pushConsoleTimeline('SYSTEM', 'Telemetry Broadcast Received', `Battery: ${bLevel || 0}% • RAM: ${Math.round((msg.telemetry?.ram_available || 0) / (1024*1024))} MB Free`, 'info');
   } else if (msg.type === 'DEVICE_LOCATION_UPDATED') {
@@ -373,14 +403,41 @@ function handleWsMessage(msg) {
       pulseDot.style.boxShadow = '0 0 10px #10b981';
     }
     if (window.loadPairingCodesHistory) window.loadPairingCodesHistory();
-    loadDevices();
-    showToast(`Device ${msg.deviceName || 'Android'} paired successfully!`);
+    scheduleDevicesRefresh();
+    showToast(`Device ${msg.deviceName || 'Android'} enrolled — waiting for the device agent to connect`);
     pushConsoleTimeline('SYSTEM', 'New Device Enrolled', `Paired ${msg.deviceName || 'Device'} (${msg.deviceId || ''})`, 'success');
   }
 }
 
 // Devices Management
 let allDevices = [];
+
+function showToast(message, type = 'info') {
+  const el = document.getElementById('toast');
+  if (!el) {
+    console.warn('[toast]', message);
+    return;
+  }
+  el.textContent = String(message);
+  el.className = `show ${type}`;
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => { el.className = ''; }, 4200);
+}
+
+// Wire elements rendered with data-action attributes to handlers — used
+// instead of inline onclick="…'${userString}'…" (which is an XSS sink).
+function wireActions(container, handlers) {
+  if (!container) return;
+  container.querySelectorAll('[data-action]').forEach(el => {
+    const fn = handlers[el.dataset.action];
+    if (!fn || el.dataset.wired === '1') return;
+    el.dataset.wired = '1';
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      fn(el.dataset, e);
+    });
+  });
+}
 
 async function loadDevices() {
   try {
@@ -420,21 +477,25 @@ function renderDevicesGrid(devices) {
   }
 
   container.innerHTML = devices.map(d => `
-    <div class="device-card" onclick="openDeviceDetail('${d.id}')">
+    <div class="device-card" data-action="open-device" data-id="${escapeHtml(d.id)}" style="cursor: pointer;">
       <div class="device-card-header">
         <div>
           <div class="device-card-name">${escapeHtml(d.device_name || 'Android Device')}</div>
           <div class="device-card-meta">${escapeHtml(d.manufacturer || '')} ${escapeHtml(d.model || '')} • Android ${escapeHtml(d.os_version || '')}</div>
         </div>
-        <span class="pill ${d.status === 'ONLINE' ? 'pill-online' : 'pill-offline'}">${d.status || 'OFFLINE'}</span>
+        <span class="pill ${d.status === 'ONLINE' ? 'pill-online' : 'pill-offline'}">${escapeHtml(d.status || 'OFFLINE')}</span>
       </div>
       <div class="device-card-metrics">
-        <span>🔋 ${d.battery_level || 0}% ${d.is_charging ? '⚡' : ''}</span>
-        <span>📡 ${d.network_type || 'Unknown'}</span>
+        <span>🔋 ${d.battery_level === null || d.battery_level === undefined ? '—' : `${escapeHtml(d.battery_level)}%`} ${d.is_charging ? '⚡' : ''}</span>
+        <span>📡 ${escapeHtml(d.network_type || 'Unknown')}</span>
         <span>🕒 ${d.last_seen ? formatTimeAgo(d.last_seen) : 'Never'}</span>
       </div>
     </div>
   `).join('');
+
+  wireActions(container, {
+    'open-device': (data) => openDeviceDetail(data.id)
+  });
 }
 
 function renderOverviewDevicesList(devices) {
@@ -460,11 +521,11 @@ function renderOverviewDevicesList(devices) {
     const phoneLetter = (d.device_name || d.model || 'A').charAt(0).toUpperCase();
     const isOnline = d.status === 'ONLINE';
     const statusClass = isOnline ? 'online' : 'offline';
-    const batLevel = d.battery_level !== undefined ? d.battery_level : 0;
+    const batLevel = d.battery_level !== null && d.battery_level !== undefined ? d.battery_level : null;
     const lastSeenStr = d.last_seen ? formatTimeAgo(d.last_seen) : 'Never';
 
     return `
-      <tr onclick="openDeviceDetail('${d.id}')" style="cursor: pointer;">
+      <tr data-action="open-device" data-id="${escapeHtml(d.id)}" style="cursor: pointer;">
         <td>
           <div class="device">
             <span class="phone ${phoneClass}">${phoneLetter}</span>
@@ -474,15 +535,21 @@ function renderOverviewDevicesList(devices) {
             </div>
           </div>
         </td>
-        <td><span class="status ${statusClass}">● ${d.status || 'OFFLINE'}</span></td>
+        <td><span class="status ${statusClass}">● ${escapeHtml(d.status || 'OFFLINE')}</span></td>
         <td>
-          <span class="battery"><i style="width: ${Math.min(100, Math.max(0, batLevel))}%"></i></span> ${batLevel}%
+          ${batLevel === null
+            ? '<span class="text-muted">—</span>'
+            : `<span class="battery"><i style="width: ${Math.min(100, Math.max(0, batLevel))}%"></i></span> ${escapeHtml(batLevel)}%`}
         </td>
         <td>${lastSeenStr}</td>
-        <td><button class="more" title="View details" onclick="event.stopPropagation(); openDeviceDetail('${d.id}')">···</button></td>
+        <td><button class="more" title="View details" data-action="open-device" data-id="${escapeHtml(d.id)}">···</button></td>
       </tr>
     `;
   }).join('');
+
+  wireActions(tbody, {
+    'open-device': (data) => openDeviceDetail(data.id)
+  });
 }
 
 function filterDevices(query) {
@@ -748,7 +815,7 @@ function renderPermissions(perms) {
   ];
 
   const html = list.map(item => `
-    <div class="perm-row" onclick="openPermissionDrawer('${escapeJs(item.label)}', '${item.code}', ${!!item.val})">
+    <div class="perm-row" data-action="open-permission" data-label="${escapeHtml(item.label)}" data-code="${escapeHtml(item.code)}" data-val="${item.val ? '1' : '0'}" style="cursor: pointer;">
       <span class="perm-label" style="font-size: 0.8rem; font-weight: 500;">${escapeHtml(item.label)}</span>
       <span class="pill ${item.val ? 'pill-online' : 'pill-offline'}" style="padding: 2px 8px; font-size: 0.65rem;">${item.val ? 'GRANTED' : 'DISABLED'}</span>
     </div>
@@ -756,6 +823,12 @@ function renderPermissions(perms) {
 
   if (legacyContainer) legacyContainer.innerHTML = html;
   if (checklistContainer) checklistContainer.innerHTML = html;
+
+  const permHandlers = {
+    'open-permission': (data) => openPermissionDrawer(data.label, data.code, data.val === '1')
+  };
+  wireActions(legacyContainer, permHandlers);
+  wireActions(checklistContainer, permHandlers);
 
   // Update Accessibility Management Panel elements
   const accessSrvBadge = document.getElementById('access-srv-badge');
@@ -857,6 +930,10 @@ function setupDetailTabs() {
 
 // Leaflet Map Integration
 function initMap() {
+  if (typeof L === 'undefined') {
+    console.warn('Leaflet not available — map disabled');
+    return;
+  }
   const mapContainer = document.getElementById('map-container');
   if (!mapContainer) return;
 
@@ -874,6 +951,10 @@ function initMap() {
 }
 
 function initConsoleMap() {
+  if (typeof L === 'undefined') {
+    console.warn('Leaflet not available — console map disabled');
+    return;
+  }
   const container = document.getElementById('console-map-container');
   if (!container) return;
 
@@ -1201,12 +1282,12 @@ async function loadDeviceNotifications(deviceId) {
         tbody.innerHTML = '<tr><td colspan="5" class="text-center">No notifications recorded</td></tr>';
       } else {
         tbody.innerHTML = notifs.map(n => `
-          <tr style="cursor: pointer;" onclick="openNotificationDrawer('${escapeJs(n.app_name || n.package_name)}', '${escapeJs(n.title || '')}', '${escapeJs(n.text || '')}', '${new Date(Number(n.post_time)).toLocaleString()}')">
+          <tr style="cursor: pointer;" data-action="open-notification" data-app="${escapeHtml(n.app_name || n.package_name || '')}" data-title="${escapeHtml(n.title || '')}" data-text="${escapeHtml(n.text || '')}" data-time="${escapeHtml(new Date(Number(n.post_time)).toLocaleString())}">
             <td><b style="color: #818cf8;">${escapeHtml(n.app_name || n.package_name)}</b></td>
             <td>${escapeHtml(n.title || '')}</td>
             <td style="max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(n.text || '')}</td>
             <td>${new Date(Number(n.post_time)).toLocaleTimeString()}</td>
-            <td onclick="event.stopPropagation()"><button class="btn-icon" onclick="deleteNotification('${deviceId}', '${n.id}')">🗑️</button></td>
+            <td onclick="event.stopPropagation()"><button class="btn-icon" data-action="delete-notification" data-notif-id="${escapeHtml(n.id)}">🗑️</button></td>
           </tr>
         `).join('');
       }
@@ -1221,7 +1302,7 @@ async function loadDeviceNotifications(deviceId) {
         consoleNotifContainer.innerHTML = '<div class="empty-state">No push notifications received yet. Waiting for device stream...</div>';
       } else {
         consoleNotifContainer.innerHTML = notifs.slice(0, 5).map(n => `
-          <div class="perm-row" onclick="openNotificationDrawer('${escapeJs(n.app_name || n.package_name)}', '${escapeJs(n.title || '')}', '${escapeJs(n.text || '')}', '${new Date(Number(n.post_time)).toLocaleString()}')" style="display: flex; align-items: flex-start; gap: 10px; background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 8px; padding: 10px; cursor: pointer; transition: background 0.2s;">
+          <div class="perm-row" data-action="open-notification" data-app="${escapeHtml(n.app_name || n.package_name || '')}" data-title="${escapeHtml(n.title || '')}" data-text="${escapeHtml(n.text || '')}" data-time="${escapeHtml(new Date(Number(n.post_time)).toLocaleString())}" style="display: flex; align-items: flex-start; gap: 10px; background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 8px; padding: 10px; cursor: pointer; transition: background 0.2s;">
             <div style="background: rgba(129, 140, 248, 0.1); border-radius: 6px; padding: 6px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; line-height: 1;">🔔</div>
             <div style="flex: 1; min-width: 0;">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
@@ -1235,6 +1316,13 @@ async function loadDeviceNotifications(deviceId) {
         `).join('');
       }
     }
+
+    const notifHandlers = {
+      'open-notification': (data) => openNotificationDrawer(data.app, data.title, data.text, data.time),
+      'delete-notification': (data) => window.deleteNotification(deviceId, data.notifId)
+    };
+    wireActions(tbody, notifHandlers);
+    wireActions(consoleNotifContainer, notifHandlers);
   } catch (_) {}
 }
 
@@ -1289,13 +1377,18 @@ async function loadDeviceApps(deviceId) {
           <td><span class="pill ${isSys ? 'pill-offline' : 'pill-online'}">${isSys ? 'SYSTEM' : 'USER'}</span></td>
           <td>
             <div style="display: flex; gap: 6px;">
-              <button class="btn btn-sm" style="padding: 3px 8px; font-size: 0.75rem;" onclick="launchApp('${deviceId}', '${pkg}')">🚀 Launch</button>
-              <button class="btn btn-sm btn-danger" style="padding: 3px 8px; font-size: 0.75rem;" onclick="uninstallApp('${deviceId}', '${pkg}')">🗑️ Uninstall</button>
+              <button class="btn btn-sm" style="padding: 3px 8px; font-size: 0.75rem;" data-action="launch-app" data-pkg="${pkg}">🚀 Launch</button>
+              <button class="btn btn-sm btn-danger" style="padding: 3px 8px; font-size: 0.75rem;" data-action="uninstall-app" data-pkg="${pkg}">🗑️ Uninstall</button>
             </div>
           </td>
         </tr>
       `;
     }).join('');
+
+    wireActions(tbody, {
+      'launch-app': (data) => launchApp(deviceId, data.pkg),
+      'uninstall-app': (data) => uninstallApp(deviceId, data.pkg)
+    });
   } catch (_) {}
 }
 
@@ -1464,10 +1557,16 @@ async function dispatchCommand(deviceId, commandType, parameters = {}) {
       body: JSON.stringify({ commandType, parameters })
     });
     const data = await res.json();
-    alert(`Command ${commandType} dispatched! (Status: ${data.status})`);
+    if (data.error) {
+      showToast(`Command rejected: ${data.error}`, 'error');
+    } else if (data.dispatchedToOnlineDevice) {
+      showToast(`Command ${commandType} sent to device (status: ${data.status})`, 'success');
+    } else {
+      showToast(`Device offline — command ${commandType} queued and will be delivered on reconnect`, 'warning');
+    }
     loadDeviceCommands(deviceId);
   } catch (err) {
-    alert('Error dispatching command: ' + err.message);
+    showToast('Error dispatching command: ' + err.message, 'error');
   }
 }
 
@@ -1664,9 +1763,9 @@ function renderGeofences(list) {
 }
 
 function drawGeofencesOnMap(list) {
-  if (!consoleMap) return;
+  if (typeof L === 'undefined' || !consoleMapInstance) return;
   geofenceMapCircles.forEach(c => {
-    try { consoleMap.removeLayer(c); } catch (_) {}
+    try { consoleMapInstance.removeLayer(c); } catch (_) {}
   });
   geofenceMapCircles = [];
 
@@ -1677,7 +1776,7 @@ function drawGeofencesOnMap(list) {
         fillColor: '#38bdf8',
         fillOpacity: 0.15,
         radius: Number(g.radius_meters) || 500
-      }).addTo(consoleMap);
+      }).addTo(consoleMapInstance);
       circle.bindPopup(`<b>${escapeHtml(g.name)}</b><br>Radius: ${g.radius_meters}m`);
       geofenceMapCircles.push(circle);
     }
@@ -2039,40 +2138,46 @@ async function loadDeviceFiles(deviceId) {
           const icon = isDir ? '📁' : '📄';
           const sizeStr = isDir ? '--' : formatBytes(Number(f.file_size));
           const dateStr = f.created_at ? new Date(f.created_at).toLocaleString() : 'N/A';
-          
+
+          // Values travel via HTML-escaped data-* attributes and are handled by
+          // addEventListener — never interpolated into inline JS (XSS sink fix).
+          const dataAttrs = `data-path="${escapeHtml(f.file_path || '')}" data-name="${escapeHtml(f.file_name || '')}" data-mime="${escapeHtml(f.mime_type || '')}" data-size="${escapeHtml(sizeStr)}"`;
+
           let actionHtml = '--';
           if (!isDir) {
-            const pathEsc = escapeJs(f.file_path);
-            const nameEsc = escapeJs(f.file_name);
             const mime = f.mime_type || '';
-            const sizeStrEsc = escapeJs(sizeStr);
-            
             const isMedia = mime.startsWith('image/') || mime.startsWith('video/') || /\.(jpg|jpeg|png|gif|mp4|mov)$/i.test(f.file_name);
-            
+
             actionHtml = `
               <div style="display: flex; gap: 6px;">
-                ${isMedia ? `<button class="btn btn-secondary btn-sm" style="padding: 3px 8px; font-size: 0.72rem;" onclick="openMediaPreview('${nameEsc}', '${pathEsc}', '${sizeStrEsc}', '${escapeJs(mime)}')">👁️ Preview</button>` : ''}
-                <button class="btn btn-primary btn-sm" style="padding: 3px 8px; font-size: 0.72rem; background: var(--cyan); border-color: var(--cyan);" onclick="downloadMediaFile('${pathEsc}', '${nameEsc}')">📥 Download</button>
+                ${isMedia ? `<button class="btn btn-secondary btn-sm file-preview-btn" style="padding: 3px 8px; font-size: 0.72rem;" data-action="preview-file" ${dataAttrs}>👁️ Preview</button>` : ''}
+                <button class="btn btn-primary btn-sm file-download-btn" style="padding: 3px 8px; font-size: 0.72rem; background: var(--cyan); border-color: var(--cyan);" data-action="download-file" ${dataAttrs}>📥 Download</button>
               </div>
             `;
           }
-          
-          const clickHandler = isDir ? `style="cursor: pointer; background: rgba(6,182,212,0.02);" onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)"` : '';
-          
+
+          const rowAttrs = isDir ? `style="cursor: pointer; background: rgba(6,182,212,0.02);" data-action="open-dir" ${dataAttrs}` : '';
+
           return `
-            <tr ${clickHandler} class="file-row-${isDir ? 'dir' : 'file'}">
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${icon}</td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}><b style="${isDir ? 'color: var(--cyan); text-decoration: underline;' : ''}">${escapeHtml(f.file_name)}</b></td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''} style="font-family: monospace; font-size: 0.8rem; opacity: 0.8;">${escapeHtml(f.file_path)}</td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${sizeStr}</td>
-              <td ${isDir ? `onclick="navigateFileSystemTo('${escapeJs(f.file_path)}', event)" style="cursor: pointer;"` : ''}>${dateStr}</td>
+            <tr ${rowAttrs} class="file-row-${isDir ? 'dir' : 'file'}">
+              <td>${icon}</td>
+              <td><b style="${isDir ? 'color: var(--cyan); text-decoration: underline;' : ''}">${escapeHtml(f.file_name)}</b></td>
+              <td style="font-family: monospace; font-size: 0.8rem; opacity: 0.8;">${escapeHtml(f.file_path)}</td>
+              <td>${escapeHtml(sizeStr)}</td>
+              <td>${escapeHtml(dateStr)}</td>
               <td>${actionHtml}</td>
             </tr>
           `;
         }).join('');
       }
-      
+
       tbody.innerHTML = rowsHtml;
+
+      wireActions(tbody, {
+        'open-dir': (data) => { window.currentDirectoryPath = data.path; window.renderFilesTable(); },
+        'preview-file': (data) => openMediaPreview(data.name, data.path, data.size, data.mime),
+        'download-file': (data) => downloadMediaFile(data.path, data.name)
+      });
     };
     
     window.navigateFileSystemTo = function(path, event) {
@@ -2102,17 +2207,14 @@ async function loadDeviceFiles(deviceId) {
     } else {
       galleryContainer.innerHTML = mediaFiles.map(f => {
         const isVideo = (f.mime_type || '').toLowerCase().startsWith('video/') || f.file_name.endsWith('.mp4');
-        const pathEsc = escapeJs(f.file_path);
-        const nameEsc = escapeJs(f.file_name);
         const sizeStr = formatBytes(Number(f.file_size));
-        const sizeStrEsc = escapeJs(sizeStr);
-        const mimeEsc = escapeJs(f.mime_type || '');
-        
+        const dataAttrs = `data-path="${escapeHtml(f.file_path || '')}" data-name="${escapeHtml(f.file_name || '')}" data-mime="${escapeHtml(f.mime_type || '')}" data-size="${escapeHtml(sizeStr)}"`;
+
         return `
-          <div class="stat-card" style="padding: 12px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; min-height: 160px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; text-align: center; cursor: pointer; transition: all 0.2s;" onclick="openMediaPreview('${nameEsc}', '${pathEsc}', '${sizeStrEsc}', '${mimeEsc}')">
+          <div class="stat-card" data-action="preview-file" ${dataAttrs} style="padding: 12px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; min-height: 160px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; text-align: center; cursor: pointer; transition: all 0.2s;">
             <div style="font-size: 2.6rem; margin-bottom: 8px; transition: transform 0.2s;">${isVideo ? '🎬' : '🖼️'}</div>
             <div style="font-size: 0.82rem; font-weight: bold; word-break: break-all; margin-bottom: 4px; max-height: 40px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">${escapeHtml(f.file_name)}</div>
-            <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">${sizeStr}</div>
+            <div style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">${escapeHtml(sizeStr)}</div>
             <div style="display: flex; gap: 4px; width: 100%; justify-content: center;">
               <span class="btn btn-secondary btn-sm" style="padding: 2px 6px; font-size: 0.65rem; pointer-events: none;">👁️ Preview</span>
               <span class="btn btn-primary btn-sm" style="padding: 2px 6px; font-size: 0.65rem; background: var(--cyan); border-color: var(--cyan); pointer-events: none;">📥 Download</span>
@@ -2120,6 +2222,10 @@ async function loadDeviceFiles(deviceId) {
           </div>
         `;
       }).join('');
+
+      wireActions(galleryContainer, {
+        'preview-file': (data) => openMediaPreview(data.name, data.path, data.size, data.mime)
+      });
     }
   } catch (err) {
     console.error('Error loading files:', err);
@@ -2136,57 +2242,108 @@ function formatBytes(bytes) {
 }
 
 // Service Health loader
+// Truthful model: (1) dashboard live-sync = our own WS; (2) device link =
+// the device's socket presence + last-seen from the server; (3) agent service
+// states come from /service-health (real fields, not invented ones).
 async function loadDeviceHealth(deviceId) {
-  const wsStatus = ws && ws.readyState === WebSocket.OPEN ? 'CONNECTED' : 'OFFLINE';
-  const wsPill = document.getElementById('health-ws-status');
-  if (wsPill) {
-    wsPill.textContent = wsStatus;
-    wsPill.style.color = wsStatus === 'CONNECTED' ? '#22c55e' : '#f43f5e';
-  }
+  const dashWsStatus = ws && ws.readyState === WebSocket.OPEN ? 'CONNECTED' : 'OFFLINE';
 
   const srvWs = document.getElementById('status-srv-ws');
   if (srvWs) {
-    srvWs.textContent = wsStatus === 'CONNECTED' ? 'Active' : 'Offline';
-    srvWs.className = `pill ${wsStatus === 'CONNECTED' ? 'pill-online' : 'pill-offline'}`;
+    srvWs.textContent = dashWsStatus === 'CONNECTED' ? 'Active' : 'Offline';
+    srvWs.className = `pill ${dashWsStatus === 'CONNECTED' ? 'pill-online' : 'pill-offline'}`;
   }
 
   try {
-    const res = await fetch(`/api/devices/${deviceId}/health`, {
+    const res = await fetch(`/api/devices/${deviceId}/service-health`, {
       headers: { 'Authorization': `Bearer ${authToken}` }
     });
     if (res.ok) {
-      const healthData = await res.json();
-      if (healthData && healthData.length > 0) {
-        const latest = healthData[0];
-        const srvNotif = document.getElementById('status-srv-notif');
-        if (srvNotif) {
-          srvNotif.textContent = latest.notification_service === 'RUNNING' ? 'Running' : (latest.notification_service || 'Disabled');
-          srvNotif.className = `pill ${latest.notification_service === 'RUNNING' ? 'pill-online' : 'pill-offline'}`;
-        }
-        const srvGps = document.getElementById('status-srv-gps');
-        if (srvGps) {
-          srvGps.textContent = latest.location_service === 'RUNNING' ? 'Running' : (latest.location_service || 'Idle');
-          srvGps.className = `pill ${latest.location_service === 'RUNNING' ? 'pill-online' : 'pill-offline'}`;
-        }
-        const srvTelem = document.getElementById('status-srv-telemetry');
-        if (srvTelem) {
-          srvTelem.textContent = latest.telemetry_service === 'RUNNING' ? 'Running' : (latest.telemetry_service || 'Active');
-          srvTelem.className = `pill ${latest.telemetry_service === 'RUNNING' ? 'pill-online' : 'pill-offline'}`;
+      const health = await res.json();
+
+      // Device WebSocket transport = the DEVICE's link, not the dashboard's.
+      const deviceOnline = !!health.deviceConnected;
+      const wsPill = document.getElementById('health-ws-status');
+      if (wsPill) {
+        wsPill.textContent = deviceOnline ? 'Connected' : 'Offline';
+        wsPill.style.color = deviceOnline ? '#22c55e' : '#f43f5e';
+      }
+
+      const setPill = (id, value, runningLabel) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const running = value === 'RUNNING';
+        el.textContent = running ? runningLabel : (value || 'Unknown');
+        el.className = `pill ${running ? 'pill-online' : 'pill-offline'}`;
+      };
+      setPill('status-srv-notif', health.notificationMonitor, 'Running');
+      setPill('status-srv-gps', health.locationService, 'Running');
+      setPill('status-srv-telemetry', health.telemetryCollector, 'Running');
+
+      const listContainer = document.getElementById('health-heartbeat-log');
+      if (listContainer) {
+        const time = new Date().toLocaleString();
+        const lastSeenStr = health.lastSeen ? new Date(health.lastSeen).toLocaleString() : 'never';
+        listContainer.replaceChildren();
+        const lines = [
+          `[${time}] [DEVICE LINK] Device socket: ${deviceOnline ? 'CONNECTED' : 'OFFLINE'} • last seen: ${lastSeenStr}`,
+          `[${time}] [DASHBOARD SYNC] Dashboard WebSocket: ${dashWsStatus}`,
+          `[${time}] [AGENT SERVICES] notifications=${health.notificationMonitor || 'UNKNOWN'} location=${health.locationService || 'UNKNOWN'} telemetry=${health.telemetryCollector || 'UNKNOWN'}`
+        ];
+        for (const line of lines) {
+          const div = document.createElement('div');
+          div.textContent = line;
+          listContainer.appendChild(div);
         }
       }
     }
   } catch (_) {}
-
-  const listContainer = document.getElementById('health-heartbeat-log');
-  if (listContainer) {
-    const time = new Date().toLocaleString();
-    listContainer.innerHTML = `
-      <div>[${time}] [WS UPLINK] WebSocket state: <b>${wsStatus}</b></div>
-      <div>[${time}] [API HEALTH] Base URL and gateway sync validated</div>
-      <div>[${time}] [CLIENT DIAGNOSTICS] Device online: <b>${currentDevice && currentDevice.status === 'ONLINE' ? 'YES' : 'NO'}</b></div>
-    `;
-  }
 }
+
+// Overview "System health" card — bound to real state (F-16).
+async function updateSystemHealth() {
+  let apiOk = false;
+  let dbMode = 'unknown';
+  let activeDevices = 0;
+  try {
+    const res = await fetch('/api/health');
+    if (res.ok) {
+      const h = await res.json();
+      apiOk = h.status === 'healthy';
+      dbMode = h.postgres ? 'postgres' : 'embedded';
+      activeDevices = h.activeDevices || 0;
+    }
+  } catch (_) {}
+
+  const wsOk = ws && ws.readyState === WebSocket.OPEN;
+
+  const setTxt = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  const setDot = (id, ok) => {
+    const el = document.getElementById(id);
+    if (el) el.style.color = ok ? '#34d399' : '#f87171';
+  };
+
+  const healthy = apiOk && wsOk;
+  setTxt('health-badge-status', healthy ? '● LIVE' : '● DEGRADED');
+  setTxt('health-score-val', healthy ? '100' : (apiOk ? '60' : '20'));
+  setTxt('health-summary-txt', healthy ? 'Everything looks good' : 'Attention required');
+  setTxt('health-sub-txt', healthy
+    ? 'All backend services & telemetry streams are connected.'
+    : (!apiOk ? 'API unreachable from this browser.' : 'Live updates disconnected — retrying…'));
+  setTxt('health-api-val', apiOk ? 'Operational' : 'Unavailable');
+  setTxt('health-db-val', dbMode === 'postgres' ? 'PostgreSQL' : (dbMode === 'embedded' ? 'Embedded (in-memory)' : 'Unknown'));
+  setTxt('health-sync-val', wsOk ? 'Active' : 'Disconnected');
+  setDot('health-sync-dot', wsOk);
+
+  // Attention = offline/enrolled-but-not-connected devices
+  const attention = allDevices.filter(d => d.status !== 'ONLINE').length;
+  setTxt('stat-attention-devices', String(attention));
+}
+
+window.refreshOverview = function() {
+  loadDevices().then(() => updateSystemHealth());
+  showToast('Overview refreshed');
+};
 
 // Audit Logs
 async function loadAuditLogs() {
@@ -2664,7 +2821,26 @@ function formatUptime(millis) {
   return `${hours}h ${mins}m`;
 }
 
-// // Media Preview Lightbox Controller
+// Media Preview Lightbox Controller
+// XSS-safe: user-controlled values are only ever set via textContent / element
+// properties, never interpolated into HTML or inline handlers.
+function safeMediaUrl(url) {
+  if (typeof url !== 'string') return null;
+  if (url.startsWith('blob:')) return url;
+  if (/^data:(image|video|audio)\//i.test(url)) return url;
+  if (url.startsWith('/uploads/') && !url.includes('..') && !url.includes('\\')) return url;
+  return null;
+}
+
+async function fetchAuthedBlobUrl(url) {
+  // Uploaded files require an Authorization header — fetch then use blob URLs.
+  if (!url.startsWith('/uploads/')) return url;
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${authToken}` } });
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
 window.openMediaPreview = async function(name, path, sizeStr, mime) {
   const lightbox = document.getElementById('media-lightbox');
   const title = document.getElementById('lightbox-title');
@@ -2672,33 +2848,33 @@ window.openMediaPreview = async function(name, path, sizeStr, mime) {
   const pathLabel = document.getElementById('lightbox-file-path');
   const previewContainer = document.getElementById('lightbox-content-preview');
   const downloadBtn = document.getElementById('lightbox-download-btn');
-  
+
   if (!lightbox) return;
-  
-  title.textContent = name;
+
+  title.textContent = name || 'File';
   size.textContent = sizeStr || 'Unknown Size';
-  pathLabel.textContent = path;
-  
-  previewContainer.innerHTML = '';
-  
-  const isVideo = mime.startsWith('video/') || path.endsWith('.mp4') || path.endsWith('.mov');
-  
-  // Resolve actual asset URL (fallback to placeholder if it is an un-synced phone local storage path)
-  let actualUrl = path;
-  
-  if (!path.startsWith('/uploads/') && !path.startsWith('http') && !path.startsWith('blob:')) {
-    // Check if we have the file synced on the server
+  pathLabel.textContent = path || '';
+  previewContainer.replaceChildren();
+
+  const mimeStr = typeof mime === 'string' ? mime : '';
+  const pathStr = typeof path === 'string' ? path : '';
+  const isVideo = mimeStr.startsWith('video/') || /\.(mp4|mov)$/i.test(pathStr);
+
+  // Resolve the actual asset URL (blob:/data:/uploads only — reject schemes
+  // like javascript: or external origins).
+  let actualUrl = safeMediaUrl(pathStr);
+
+  if (pathStr && !actualUrl && !pathStr.startsWith('http') && !pathStr.startsWith('blob:')) {
+    // Device-local path: check whether the server has a streamed copy.
     try {
       const checkRes = await fetch(`/api/devices/${currentDevice.id}/files`, {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
       if (checkRes.ok) {
         const files = await checkRes.json();
-        const fileEntry = files.find(f => f.file_path === path);
+        const fileEntry = files.find(f => f.file_path === pathStr);
         if (fileEntry && fileEntry.web_path) {
-          actualUrl = fileEntry.web_path;
-        } else {
-          actualUrl = null;
+          actualUrl = safeMediaUrl(fileEntry.web_path);
         }
       }
     } catch (e) {
@@ -2706,29 +2882,48 @@ window.openMediaPreview = async function(name, path, sizeStr, mime) {
     }
   }
 
+  if (actualUrl) {
+    actualUrl = await fetchAuthedBlobUrl(actualUrl);
+  }
+
   if (!actualUrl) {
-    // Show high-tech loading & remote pull interface
-    previewContainer.innerHTML = `
-      <div id="media-pull-loader" style="padding: 40px; text-align: center; color: var(--cyan); width: 100%;">
-        <div style="font-size: 3rem; margin-bottom: 12px; animation: pulse 1.5s infinite;">⚡</div>
-        <h4 style="margin: 0 0 4px 0; color: #fff;">File Available on Remote Device</h4>
-        <p style="font-size: 0.78rem; color: var(--text-muted); max-width: 320px; margin: 0 auto 15px auto;">
-          This file is located on the remote Android storage. Tap below to stream and preview it online.
-        </p>
-        <button id="btn-pull-preview" class="btn btn-primary btn-sm" style="background: var(--cyan); border-color: var(--cyan); font-weight: 500;">👁️ Stream File Now</button>
-      </div>
-    `;
-    
+    // Remote pull interface — DOM-built (no innerHTML with user data).
+    const loader = document.createElement('div');
+    loader.id = 'media-pull-loader';
+    loader.style.cssText = 'padding: 40px; text-align: center; color: var(--cyan); width: 100%;';
+
+    const icon = document.createElement('div');
+    icon.style.cssText = 'font-size: 3rem; margin-bottom: 12px; animation: pulse 1.5s infinite;';
+    icon.textContent = '⚡';
+    const heading = document.createElement('h4');
+    heading.style.cssText = 'margin: 0 0 4px 0; color: #fff;';
+    heading.textContent = 'File Available on Remote Device';
+    const desc = document.createElement('p');
+    desc.style.cssText = 'font-size: 0.78rem; color: var(--text-muted); max-width: 320px; margin: 0 auto 15px auto;';
+    desc.textContent = 'This file is located on the remote Android storage. Tap below to stream and preview it online.';
+    const pullBtn = document.createElement('button');
+    pullBtn.id = 'btn-stream-file';
+    pullBtn.className = 'btn btn-primary btn-sm';
+    pullBtn.style.cssText = 'background: var(--cyan); border-color: var(--cyan); font-weight: 500;';
+    pullBtn.textContent = '👁️ Stream File Now';
+
+    loader.append(icon, heading, desc, pullBtn);
+    previewContainer.appendChild(loader);
     lightbox.classList.remove('hidden');
-    
-    document.getElementById('btn-pull-preview').addEventListener('click', async () => {
-      const loader = document.getElementById('media-pull-loader');
-      loader.innerHTML = `
-        <div class="loader" style="margin: 0 auto 15px auto;"></div>
-        <h4 style="margin: 0 0 4px 0; color: #fff;">Streaming from Device...</h4>
-        <p style="font-size: 0.78rem; color: var(--text-muted);">Please keep the device connection active.</p>
-      `;
-      
+
+    pullBtn.addEventListener('click', async () => {
+      loader.replaceChildren();
+      const spin = document.createElement('div');
+      spin.className = 'loader';
+      spin.style.cssText = 'margin: 0 auto 15px auto;';
+      const h = document.createElement('h4');
+      h.style.cssText = 'margin: 0 0 4px 0; color: #fff;';
+      h.textContent = 'Streaming from Device...';
+      const p = document.createElement('p');
+      p.style.cssText = 'font-size: 0.78rem; color: var(--text-muted);';
+      p.textContent = 'Please keep the device connection active.';
+      loader.append(spin, h, p);
+
       try {
         const dispatchRes = await fetch(`/api/devices/${currentDevice.id}/commands`, {
           method: 'POST',
@@ -2738,65 +2933,80 @@ window.openMediaPreview = async function(name, path, sizeStr, mime) {
           },
           body: JSON.stringify({
             commandType: 'UPLOAD_FILE',
-            parameters: { path: path }
+            parameters: { path: pathStr }
           })
         });
-        
+
+        const dispatchData = await dispatchRes.json().catch(() => ({}));
         if (dispatchRes.ok) {
+          if (!dispatchData.dispatchedToOnlineDevice) {
+            showToast('Device offline — stream request queued; try again when the device is connected', 'warning');
+          }
           let attempts = 0;
           const interval = setInterval(async () => {
             attempts++;
             if (attempts > 15) {
               clearInterval(interval);
-              loader.innerHTML = `
-                <div style="font-size: 3rem; margin-bottom: 12px; color: var(--danger);">⚠️</div>
-                <h4 style="margin: 0 0 4px 0; color: #fff;">Streaming Timed Out</h4>
-                <p style="font-size: 0.78rem; color: var(--text-muted);">Please check if the device is active and retry.</p>
-              `;
+              loader.replaceChildren();
+              const warn = document.createElement('div');
+              warn.style.cssText = 'font-size: 3rem; margin-bottom: 12px; color: var(--danger);';
+              warn.textContent = '⚠️';
+              const wh = document.createElement('h4');
+              wh.style.cssText = 'margin: 0 0 4px 0; color: #fff;';
+              wh.textContent = 'Streaming Timed Out';
+              const wp = document.createElement('p');
+              wp.style.cssText = 'font-size: 0.78rem; color: var(--text-muted);';
+              wp.textContent = 'Please check if the device is active and retry.';
+              loader.append(warn, wh, wp);
               return;
             }
-            
+
             const checkRes = await fetch(`/api/devices/${currentDevice.id}/files`, {
               headers: { 'Authorization': `Bearer ${authToken}` }
             });
             if (checkRes.ok) {
               const files = await checkRes.json();
-              const fileEntry = files.find(f => f.file_path === path);
+              const fileEntry = files.find(f => f.file_path === pathStr);
               if (fileEntry && fileEntry.web_path) {
                 clearInterval(interval);
-                showToast(`File streamed successfully!`);
-                openMediaPreview(name, fileEntry.web_path, sizeStr, mime);
+                showToast('File streamed successfully!');
+                openMediaPreview(name, fileEntry.web_path, sizeStr, mimeStr);
               }
             }
           }, 800);
         } else {
-          showToast("Failed to dispatch pull command.");
+          showToast('Failed to dispatch pull command.', 'error');
         }
       } catch (err) {
-        showToast("Error pulling media.");
+        showToast('Error pulling media.', 'error');
       }
     });
     return;
   }
-  
+
   if (isVideo) {
-    previewContainer.innerHTML = `
-      <video controls autoplay style="max-height: 340px; width: 100%; border-radius: 4px;">
-        <source src="${actualUrl}" type="${mime || 'video/mp4'}">
-        Your browser does not support the video tag.
-      </video>
-    `;
+    const video = document.createElement('video');
+    video.controls = true;
+    video.autoplay = true;
+    video.style.cssText = 'max-height: 340px; width: 100%; border-radius: 4px;';
+    video.src = actualUrl;
+    previewContainer.appendChild(video);
   } else {
-    previewContainer.innerHTML = `
-      <img src="${actualUrl}" style="max-height: 340px; max-width: 100%; object-fit: contain; border-radius: 4px;" onerror="this.src='https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=640&auto=format&fit=crop';">
-    `;
+    const img = document.createElement('img');
+    img.style.cssText = 'max-height: 340px; max-width: 100%; object-fit: contain; border-radius: 4px;';
+    img.alt = name || 'File preview';
+    img.addEventListener('error', () => {
+      img.alt = 'Preview unavailable';
+    });
+    img.src = actualUrl;
+    previewContainer.appendChild(img);
   }
-  
+
   downloadBtn.onclick = (e) => {
     e.preventDefault();
-    downloadMediaFile(actualUrl, name);
+    downloadMediaFile(actualUrl.startsWith('blob:') ? pathStr : actualUrl, name);
   };
-  
+
   lightbox.classList.remove('hidden');
 };
 
@@ -2813,11 +3023,27 @@ window.closeMediaLightbox = function() {
 
 window.downloadMediaFile = async function(path, name) {
   if (!currentDevice) return;
-  
-  if (path.startsWith('/uploads/') || path.startsWith('http') || path.startsWith('blob:')) {
+
+  const safeUrl = safeMediaUrl(path);
+  if (path.startsWith('/uploads/') || (safeUrl && (safeUrl.startsWith('blob:') || safeUrl.startsWith('data:')))) {
+    // Uploaded files are behind auth — fetch with the token, then save the blob.
+    let href = safeUrl;
+    if (path.startsWith('/uploads/')) {
+      try {
+        const res = await fetch(path, { headers: { 'Authorization': `Bearer ${authToken}` } });
+        if (!res.ok) {
+          showToast('Download failed: not authorized or file missing', 'error');
+          return;
+        }
+        href = URL.createObjectURL(await res.blob());
+      } catch (e) {
+        showToast('Download failed', 'error');
+        return;
+      }
+    }
     const link = document.createElement('a');
-    link.href = path;
-    link.setAttribute('download', name || 'file');
+    link.href = href;
+    link.setAttribute('download', String(name || 'file').replace(/[\/:*?"<>|]/g, '_'));
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

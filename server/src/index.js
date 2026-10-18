@@ -2,12 +2,18 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
 import multer from 'multer';
-import { initDb, db } from './db.js';
+import { initDb, db, countUsers, createUser, findUserByIdentifier, userExists } from './db.js';
 import { setupWebSocket } from './ws.js';
-import { generateToken, verifyToken, optionalAuth, hashPassword, comparePassword } from './auth.js';
+import {
+  requireUser, verifyToken, requireDevice, verifyTokenString,
+  generateUserToken, generateDeviceToken,
+  hashPassword, comparePassword, comparePasswordDummy
+} from './auth.js';
+import { createRateLimiter, allowAttempt } from './rate-limit.js';
 import QRCode from 'qrcode';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,35 +31,164 @@ app.set('trust proxy', true);
 const server = http.createServer(app);
 const PORT = process.env.PORT || process.env.DEFAULT_APP_PORT || process.env.APP_PORT || 3000;
 
-// Setup Uploads directory
+// ==========================================
+// UPLOADS (private store + authorized downloads)
+// ==========================================
 const uploadsDir = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+const BLOCKED_MIME = /^(text\/html|image\/svg\+xml|application\/javascript|application\/xhtml|text\/javascript)/i;
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => cb(null, `${Date.now()}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`)
+  filename: (req, file, cb) => {
+    // Server-side generated names: random, traversal-safe, extension preserved.
+    const ext = path.extname(file.originalname || '').toLowerCase().replace(/[^a-z0-9.]/g, '').slice(0, 12);
+    cb(null, `${Date.now()}_${crypto.randomBytes(8).toString('hex')}${ext}`);
+  }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 20 },
+  fileFilter: (req, file, cb) => {
+    if (BLOCKED_MIME.test(file.mimetype || '')) {
+      return cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'Unsupported file type'));
+    }
+    cb(null, true);
+  }
+});
 
-// Middlewares
-app.use(cors());
+// ==========================================
+// MIDDLEWARE
+// ==========================================
+const corsOrigins = (process.env.CORS_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors(corsOrigins.length > 0 ? { origin: corsOrigins } : { origin: false }));
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Serve static dashboard files
+// Baseline security headers (no external dependency).
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-inline'; " + // 'unsafe-inline' kept for legacy inline handlers (documented residual risk)
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    "img-src 'self' data: blob: https://*.tile.openstreetmap.org; " +
+    "media-src 'self' blob:; " +
+    "connect-src 'self' ws: wss:; " +
+    "object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
+  res.removeHeader('X-Powered-By');
+  next();
+});
+
+// Serve static dashboard files (never /uploads — downloads are authorized below)
 app.use(express.static(path.join(process.cwd(), 'public')));
 app.use(express.static(path.join(__dirname, '..', 'public')));
-app.use('/uploads', express.static(uploadsDir));
 
 // Initialize Database & WebSockets
 await initDb();
 const wsManager = setupWebSocket(server);
 
 // ==========================================
-// AUDIT LOG HELPER
+// RATE LIMITERS
 // ==========================================
+const authLimiter = createRateLimiter({ name: 'auth', windowMs: 15 * 60 * 1000, max: 50 });
+const pairingLimiter = createRateLimiter({ name: 'pairing', windowMs: 10 * 60 * 1000, max: 30 });
+const ingestLimiter = createRateLimiter({ name: 'ingest', windowMs: 60 * 1000, max: 240 });
+
+// ==========================================
+// HELPERS
+// ==========================================
+
+// Wrap async handlers so rejections become JSON 500s instead of hung requests.
+const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch((err) => {
+  console.error('[Server Error]', err.message);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+function sanitizeDevice(device) {
+  if (!device) return device;
+  const clone = { ...device };
+  delete clone.auth_token;
+  delete clone.password_hash;
+  return clone;
+}
+
+function sanitizeUser(user) {
+  if (!user) return user;
+  return { id: user.id, username: user.username, email: user.email, role: user.role };
+}
+
+/** Normalize an arbitrary string for storage as metadata (defense in depth). */
+function cleanMeta(value, maxLen = 255) {
+  if (value === null || value === undefined) return value;
+  return String(value).replace(/[\u0000-\u001f\u007f<>]/g, '').slice(0, maxLen);
+}
+
+function asInt(value, fallback = null) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+async function findDeviceForUser(deviceId, userId) {
+  if (db.isPostgres()) {
+    const result = await db.query('SELECT * FROM devices WHERE id = $1', [deviceId]);
+    const dev = result.rows[0];
+    return dev && String(dev.user_id) === String(userId) ? dev : null;
+  }
+  const dev = db.getMemoryStore().devices.get(deviceId);
+  return dev && String(dev.user_id) === String(userId) ? dev : null;
+}
+
+/**
+ * Authorization for device-scoped data ingestion:
+ * - the device itself (device JWT whose deviceId matches :id), or
+ * - the user who owns the device.
+ */
+const deviceDataAuth = ah(async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Format is: Bearer <token>' });
+  }
+  const decoded = verifyTokenString(authHeader.slice(7));
+  if (!decoded) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+  const deviceId = req.params.id;
+  if (decoded.type === 'device') {
+    if (!decoded.deviceId || decoded.deviceId !== deviceId) {
+      return res.status(403).json({ error: 'Device token does not match the requested device' });
+    }
+    req.device = decoded;
+    req.deviceId = deviceId;
+    return next();
+  }
+  const dev = await findDeviceForUser(deviceId, decoded.id);
+  if (!dev) {
+    return res.status(404).json({ error: 'Device not found' });
+  }
+  req.user = decoded;
+  return next();
+});
+
+/** Admin read/write access to a device the user owns (device tokens rejected). */
+const requireDeviceOwner = ah(async (req, res, next) => {
+  const deviceId = req.params.id;
+  const dev = await findDeviceForUser(deviceId, req.user.id);
+  if (!dev) {
+    return res.status(404).json({ error: 'Device not found' });
+  }
+  req.deviceRecord = dev;
+  return next();
+});
+
 async function logAudit(userId, deviceId, action, details, ip) {
   try {
     if (db.isPostgres()) {
@@ -73,145 +208,140 @@ async function logAudit(userId, deviceId, action, details, ip) {
       });
     }
   } catch (e) {
-    console.error('Audit log error:', e);
+    console.error('Audit log error:', e.message);
   }
 }
 
 // ==========================================
 // HEALTH & METRICS
 // ==========================================
-app.get(['/health', '/api/health', '/v1/health', '/api/v1/health', '/healthcheck', '/status', '/api'], (req, res) => {
+const healthHandler = (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
     postgres: db.isPostgres(),
+    api: 'ok',
+    database: 'ok',
     activeDevices: wsManager.deviceSockets.size,
     activeDashboards: wsManager.dashboardSockets.size
   });
-});
+};
+app.get(['/health', '/api/health', '/v1/health', '/api/v1/health', '/healthcheck', '/status', '/api'], healthHandler);
 
 // ==========================================
 // AUTHENTICATION ROUTES
 // ==========================================
-app.post('/api/auth/register', async (req, res) => {
+const USERNAME_RE = /^[a-zA-Z0-9_.-]{3,32}$/;
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+function validateRegistration({ username, email, password }, res) {
+  if (!email || !password) {
+    res.status(400).json({ error: 'Email and password required' });
+    return false;
+  }
+  if (!EMAIL_RE.test(email) || email.length > 255) {
+    res.status(400).json({ error: 'A valid email address is required' });
+    return false;
+  }
+  if (username && !USERNAME_RE.test(username)) {
+    res.status(400).json({ error: 'Username must be 3-32 characters: letters, numbers, dot, dash, underscore' });
+    return false;
+  }
+  if (typeof password !== 'string' || password.length < 8 || password.length > 128) {
+    res.status(400).json({ error: 'Password must be at least 8 characters' });
+    return false;
+  }
+  return true;
+}
+
+// One-time first-administrator bootstrap. Only works while ZERO users exist;
+// permanently disabled afterwards. Never recreates default credentials.
+app.post('/api/auth/bootstrap', authLimiter, ah(async (req, res) => {
+  const existing = await countUsers();
+  if (existing > 0) {
+    return res.status(403).json({ error: 'Bootstrap is only available on a fresh instance with no users' });
+  }
   const { username, email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password required' });
-  }
-  const name = username || email.split('@')[0] || 'Admin';
+  if (!validateRegistration({ username, email, password }, res)) return;
 
+  const name = username || email.split('@')[0];
+  const user = await createUser({ username: name, email, password, role: 'admin' });
+  const token = generateUserToken(user);
+  logAudit(user.id, null, 'BOOTSTRAP_ADMIN', { email }, req.ip);
+  res.json({ token, user: sanitizeUser(user) });
+}));
+
+app.post('/api/auth/register', authLimiter, ah(async (req, res) => {
+  const { username, email, password } = req.body;
+  if (!validateRegistration({ username, email, password }, res)) return;
+  const name = username || email.split('@')[0];
+
+  // Reject duplicates — registration must NEVER modify an existing account.
+  if (await userExists({ username: name, email })) {
+    return res.status(409).json({ error: 'Username or email is already registered' });
+  }
+
+  let user;
   try {
-    const hashed = await hashPassword(password);
-    let userId;
-
-    if (db.isPostgres()) {
-      const checkRes = await db.query('SELECT id FROM users WHERE email = $1 OR username = $2', [email, name]);
-      if (checkRes.rows.length > 0) {
-        userId = checkRes.rows[0].id;
-        await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashed, userId]);
-      } else {
-        const result = await db.query(
-          'INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, username, email, role',
-          [name, email, hashed, 'admin']
-        );
-        userId = result.rows[0].id;
-      }
-    } else {
-      const store = db.getMemoryStore();
-      const existing = store.users.find(u => u.email === email || u.username === name);
-      if (existing) {
-        userId = existing.id;
-        existing.password_hash = hashed;
-      } else {
-        userId = store.users.length + 1;
-        store.users.push({
-          id: userId,
-          username: name,
-          email,
-          password_hash: hashed,
-          role: 'admin',
-          created_at: new Date()
-        });
-      }
-    }
-
-    const token = generateToken({ id: userId, username: name, email, role: 'admin' });
-    logAudit(userId, null, 'REGISTER', { email, username: name }, req.ip);
-    res.json({ token, user: { id: userId, username: name, email, role: 'admin' } });
+    user = await createUser({ username: name, email, password, role: 'admin' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // Unique-constraint race: surface a clean 409, never raw driver errors.
+    if (String(err.code) === '23505' || /unique|duplicate/i.test(String(err.message))) {
+      return res.status(409).json({ error: 'Username or email is already registered' });
+    }
+    throw err;
   }
-});
 
-app.post('/api/auth/login', async (req, res) => {
-  const email = req.body.email || req.body.identifier || req.body.username;
+  const token = generateUserToken(user);
+  logAudit(user.id, null, 'REGISTER', { email, username: name }, req.ip);
+  res.json({ token, user: sanitizeUser(user) });
+}));
+
+app.post('/api/auth/login', authLimiter, ah(async (req, res) => {
+  const identifier = req.body.email || req.body.identifier || req.body.username;
   const password = req.body.password;
-  if (!email || !password) {
+  if (!identifier || !password) {
     return res.status(400).json({ error: 'Email/username and password required' });
   }
 
-  try {
-    let user;
-    if (db.isPostgres()) {
-      const result = await db.query('SELECT * FROM users WHERE email = $1 OR username = $1', [email]);
-      user = result.rows[0];
-    } else {
-      user = db.getMemoryStore().users.find(u => u.email === email || u.username === email);
-    }
+  const user = await findUserByIdentifier(String(identifier));
 
-    if (!user) {
-      // Auto-register user if not present in DB
-      const hashed = await hashPassword(password);
-      const name = email.split('@')[0] || 'Admin';
-      if (db.isPostgres()) {
-        const result = await db.query(
-          'INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, username, email, role',
-          [name, email, hashed, 'admin']
-        );
-        user = result.rows[0];
-      } else {
-        const store = db.getMemoryStore();
-        user = { id: store.users.length + 1, username: name, email, password_hash: hashed, role: 'admin', created_at: new Date() };
-        store.users.push(user);
-      }
-    } else {
-      const valid = await comparePassword(password, user.password_hash);
-      if (!valid) {
-        // If password changed or differed from seed, update password hash seamlessly
-        const newHash = await hashPassword(password);
-        if (db.isPostgres()) {
-          await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, user.id]);
-        } else {
-          user.password_hash = newHash;
-        }
-      }
-    }
-
-    const token = generateToken({ id: user.id, username: user.username, email: user.email, role: user.role });
-    logAudit(user.id, null, 'LOGIN', { email }, req.ip);
-
-    res.json({
-      token,
-      user: { id: user.id, username: user.username, email: user.email, role: user.role }
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  if (!user) {
+    // Equalize timing with the invalid-password path; do NOT auto-register.
+    await comparePasswordDummy(String(password));
+    return res.status(401).json({ error: 'Invalid credentials' });
   }
-});
+
+  const valid = await comparePassword(String(password), user.password_hash);
+  if (!valid) {
+    // An incorrect password must never change the stored password.
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  const token = generateUserToken(user);
+  logAudit(user.id, null, 'LOGIN', { identifier: String(identifier).slice(0, 255) }, req.ip);
+
+  res.json({ token, user: sanitizeUser(user) });
+}));
 
 app.get('/api/auth/me', verifyToken, (req, res) => {
+  // Device tokens are not user sessions.
+  if (req.user && req.user.type === 'device') {
+    return res.status(403).json({ error: 'User authentication required' });
+  }
   res.json({ user: req.user });
 });
 
 // ==========================================
-// ==========================================
 // PAIRING SYSTEM & SERVER CONFIGURATION
 // ==========================================
 
-// Helper to calculate dynamic server URLs from request (enforces HTTPS/WSS for remote networks, supports custom VPS override)
+// Dynamic server URLs from the request. The protocol is taken from what the
+// client actually used (direct or via x-forwarded-proto); HTTPS/WSS is NOT
+// forced on plain-HTTP hosts (that previously broke LAN deployments).
 function getHostUrls(req, customUrlOverride = null) {
   const customUrl = customUrlOverride || req?.body?.serverUrl || req?.body?.customServerUrl || req?.query?.customServerUrl || process.env.PUBLIC_SERVER_URL || process.env.SERVER_BASE_URL;
-  
+
   if (customUrl && typeof customUrl === 'string' && customUrl.trim().length > 0) {
     let formatted = customUrl.trim().replace(/\/$/, '');
     if (!formatted.startsWith('http://') && !formatted.startsWith('https://')) {
@@ -228,10 +358,7 @@ function getHostUrls(req, customUrlOverride = null) {
 
   const host = String(req.headers['x-forwarded-host'] || req.headers.host || `localhost:${PORT}`).split(',')[0].trim();
   const rawProto = String(req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http')).split(',')[0].trim().toLowerCase();
-
-  // If host is a remote network domain/IP (not localhost / 127.0.0.1 / 10.0.2.2), enforce https & wss
-  const isLocalHost = /^localhost|^127\.0\.0\.1|^10\.0\.2\.2/i.test(host);
-  const isHttps = !isLocalHost || rawProto === 'https' || req.secure === true;
+  const isHttps = rawProto === 'https' || req.secure === true;
 
   const protocol = isHttps ? 'https' : 'http';
   const wsProtocol = isHttps ? 'wss' : 'ws';
@@ -242,7 +369,6 @@ function getHostUrls(req, customUrlOverride = null) {
   };
 }
 
-// Server Environment Config Endpoint
 app.get(['/api/server/config', '/api/config'], (req, res) => {
   const { serverUrl, wsUrl } = getHostUrls(req);
   res.json({
@@ -256,18 +382,24 @@ app.get(['/api/server/config', '/api/config'], (req, res) => {
   });
 });
 
-// Admin generates a 6-digit code and scannable QR payload for device pairing (30-second expiration)
-const generatePairingCodeHandler = async (req, res) => {
+// Admin generates a 6-digit code and scannable QR payload for device pairing
+// (30-second expiration by default; PAIRING_TTL_SECONDS overrides for testing).
+const PAIRING_TTL_SECONDS = Math.max(1, parseInt(process.env.PAIRING_TTL_SECONDS) || 30);
+const generatePairingCodeHandler = ah(async (req, res) => {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 30 * 1000); // 30 seconds
-  const environment = req.body.environment || 'Default VPS';
+  const expiresAt = new Date(Date.now() + PAIRING_TTL_SECONDS * 1000);
+  const environment = cleanMeta(req.body.environment || 'Default VPS', 100);
   const { serverUrl, wsUrl } = getHostUrls(req);
 
+  // Payload keys: `serverUrl`/`wsUrl` for the Android parser (QrPairingPayload),
+  // `server`/`ws` kept as aliases for backward compatibility.
   const pairingPayload = {
     v: 1,
     code,
     server: serverUrl,
     ws: wsUrl,
+    serverUrl,
+    wsUrl,
     expiresAt: expiresAt.toISOString(),
     environment
   };
@@ -284,7 +416,7 @@ const generatePairingCodeHandler = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('[QR Generation Error]', err);
+    console.error('[QR Generation Error]', err.message);
   }
 
   if (db.isPostgres()) {
@@ -300,6 +432,7 @@ const generatePairingCodeHandler = async (req, res) => {
       expires_at: expiresAt,
       used: false,
       revoked: false,
+      attempts: 0,
       created_at: new Date()
     });
   }
@@ -314,13 +447,12 @@ const generatePairingCodeHandler = async (req, res) => {
     payload: pairingPayload,
     qrDataUrl
   });
-};
+});
 
-app.post('/api/devices/pair-code', verifyToken, generatePairingCodeHandler);
-app.post('/api/pairing/generate', verifyToken, generatePairingCodeHandler);
+app.post('/api/devices/pair-code', requireUser, pairingLimiter, generatePairingCodeHandler);
+app.post('/api/pairing/generate', requireUser, pairingLimiter, generatePairingCodeHandler);
 
-// Admin lists active and historical pairing codes
-const listPairingCodesHandler = async (req, res) => {
+const listPairingCodesHandler = ah(async (req, res) => {
   const now = new Date();
   if (db.isPostgres()) {
     const result = await db.query(
@@ -338,7 +470,7 @@ const listPairingCodesHandler = async (req, res) => {
   } else {
     const list = Array.from(db.getMemoryStore().pairing_codes.values())
       .filter(c => c.user_id === req.user.id)
-      .map(c => {
+      .map(({ attempts, ...c }) => {
         let status = 'ACTIVE';
         if (c.revoked) status = 'REVOKED';
         else if (c.used) status = 'REDEEMED';
@@ -348,13 +480,12 @@ const listPairingCodesHandler = async (req, res) => {
       .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
     res.json(list);
   }
-};
+});
 
-app.get('/api/devices/pair-codes', verifyToken, listPairingCodesHandler);
-app.get('/api/pairing/codes', verifyToken, listPairingCodesHandler);
+app.get('/api/devices/pair-codes', requireUser, listPairingCodesHandler);
+app.get('/api/pairing/codes', requireUser, listPairingCodesHandler);
 
-// Admin revokes a pending pairing code
-const revokePairingCodeHandler = async (req, res) => {
+const revokePairingCodeHandler = ah(async (req, res) => {
   const code = req.params.code || req.body.code;
   if (!code) return res.status(400).json({ error: 'Pairing code required' });
 
@@ -369,19 +500,26 @@ const revokePairingCodeHandler = async (req, res) => {
 
   logAudit(req.user.id, null, 'REVOKE_PAIRING_CODE', { code }, req.ip);
   res.json({ success: true, message: `Pairing code ${code} revoked` });
-};
+});
 
-app.delete('/api/devices/pair-codes/:code', verifyToken, revokePairingCodeHandler);
-app.delete('/api/pairing/codes/:code', verifyToken, revokePairingCodeHandler);
-app.post('/api/pairing/revoke', verifyToken, revokePairingCodeHandler);
+app.delete('/api/devices/pair-codes/:code', requireUser, revokePairingCodeHandler);
+app.delete('/api/pairing/codes/:code', requireUser, revokePairingCodeHandler);
+app.post('/api/pairing/revoke', requireUser, revokePairingCodeHandler);
 
-// Android device submits/redeems pairing code (no admin login required on app)
-const redeemPairingCodeHandler = async (req, res) => {
-  const pairingCode = req.body.pairingCode || req.body.code;
+const MAX_PAIRING_ATTEMPTS = 5;
+
+// Android device redeems a pairing code (device enrollment; no admin login on app)
+const redeemPairingCodeHandler = ah(async (req, res) => {
+  const pairingCode = String(req.body.pairingCode || req.body.code || '').trim();
   const { deviceName, manufacturer, model, osVersion, sdkVersion, appVersion } = req.body;
 
   if (!pairingCode) {
     return res.status(400).json({ success: false, message: 'Pairing code is required' });
+  }
+
+  // Brute-force controls: per-IP limiter + per-code attempt cap.
+  if (!allowAttempt(`pair-redeem:${req.ip}`, { max: 15, windowMs: 10 * 60 * 1000 })) {
+    return res.status(429).json({ success: false, message: 'Too many pairing attempts. Try again later.' });
   }
 
   const now = new Date();
@@ -394,10 +532,20 @@ const redeemPairingCodeHandler = async (req, res) => {
     );
     if (result.rows.length > 0) {
       validPairing = result.rows[0];
+      if ((validPairing.attempts || 0) >= MAX_PAIRING_ATTEMPTS) {
+        await db.query('UPDATE pairing_codes SET revoked = TRUE WHERE id = $1', [validPairing.id]);
+        return res.status(429).json({ success: false, message: 'Too many attempts for this pairing code. Generate a new code.' });
+      }
+      await db.query('UPDATE pairing_codes SET attempts = COALESCE(attempts, 0) + 1 WHERE id = $1', [validPairing.id]);
     }
   } else {
     const entry = db.getMemoryStore().pairing_codes.get(pairingCode);
     if (entry && !entry.used && !entry.revoked && new Date() < new Date(entry.expires_at)) {
+      entry.attempts = (entry.attempts || 0) + 1;
+      if (entry.attempts > MAX_PAIRING_ATTEMPTS) {
+        entry.revoked = true;
+        return res.status(429).json({ success: false, message: 'Too many attempts for this pairing code. Generate a new code.' });
+      }
       validPairing = entry;
     }
   }
@@ -409,8 +557,9 @@ const redeemPairingCodeHandler = async (req, res) => {
     });
   }
 
-  const deviceId = 'dev_' + Math.random().toString(36).substring(2, 10);
-  const deviceToken = generateToken({ deviceId, type: 'device' }, '365d');
+  const deviceId = 'dev_' + crypto.randomBytes(8).toString('hex');
+  const deviceToken = generateDeviceToken(deviceId);
+  const enrolledStatus = 'ENROLLED'; // truthful: waiting for the device to connect
 
   if (db.isPostgres()) {
     await db.query(
@@ -424,14 +573,14 @@ const redeemPairingCodeHandler = async (req, res) => {
       [
         deviceId,
         validPairing.user_id,
-        deviceName || 'Android Device',
-        manufacturer || 'Android',
-        model || 'Device',
-        osVersion || 'Android',
-        sdkVersion || 34,
-        appVersion || '1.0',
+        cleanMeta(deviceName || 'Android Device', 150),
+        cleanMeta(manufacturer, 100) || 'Android',
+        cleanMeta(model, 100) || 'Device',
+        cleanMeta(osVersion, 50) || 'Android',
+        asInt(sdkVersion, 34),
+        cleanMeta(appVersion, 50) || '1.0',
         deviceToken,
-        'ONLINE',
+        enrolledStatus,
         now
       ]
     );
@@ -448,21 +597,22 @@ const redeemPairingCodeHandler = async (req, res) => {
     store.devices.set(deviceId, {
       id: deviceId,
       user_id: validPairing.user_id,
-      device_name: deviceName || 'Android Device',
-      manufacturer: manufacturer || 'Android',
-      model: model || 'Device',
-      os_version: osVersion || 'Android',
-      sdk_version: sdkVersion || 34,
-      app_version: appVersion || '1.0',
+      device_name: cleanMeta(deviceName || 'Android Device', 150),
+      manufacturer: cleanMeta(manufacturer, 100) || 'Android',
+      model: cleanMeta(model, 100) || 'Device',
+      os_version: cleanMeta(osVersion, 50) || 'Android',
+      sdk_version: asInt(sdkVersion, 34),
+      app_version: cleanMeta(appVersion, 50) || '1.0',
       auth_token: deviceToken,
-      status: 'ONLINE',
-      battery_level: 100,
+      status: enrolledStatus,
+      // No fabricated telemetry: metrics stay null until the device reports them.
+      battery_level: null,
       is_charging: false,
       storage_available: 0,
       storage_total: 0,
       ram_available: 0,
       ram_total: 0,
-      network_type: 'Wi-Fi',
+      network_type: null,
       wifi_ssid: null,
       uptime_millis: 0,
       last_seen: now,
@@ -479,7 +629,7 @@ const redeemPairingCodeHandler = async (req, res) => {
     });
   }
 
-  logAudit(validPairing.user_id, deviceId, 'DEVICE_PAIRED', { deviceName, model, code: pairingCode }, req.ip);
+  logAudit(validPairing.user_id, deviceId, 'DEVICE_PAIRED', { deviceName: cleanMeta(deviceName, 150), model: cleanMeta(model, 100), code: pairingCode }, req.ip);
 
   wsManager.broadcastToDashboards({
     type: 'DEVICE_PAIRED',
@@ -497,9 +647,9 @@ const redeemPairingCodeHandler = async (req, res) => {
     serverUrl,
     wsUrl,
     environment: validPairing.environment || 'Default VPS',
-    message: 'Device paired successfully'
+    message: 'Device paired successfully. Status is ENROLLED until the device connects.'
   });
-};
+});
 
 app.post([
   '/api/devices/pair',
@@ -514,14 +664,14 @@ app.post([
   '/api/v1/devices/pair',
   '/v1/pairing/redeem',
   '/v1/devices/pair'
-], redeemPairingCodeHandler);
+], pairingLimiter, redeemPairingCodeHandler);
 
-// Admin claims / pairs a device directly from the web dashboard using a pairing code
-app.post(['/api/pairing/claim', '/api/devices/claim'], verifyToken, async (req, res) => {
-  const code = (req.body.code || req.body.pairingCode || '').trim();
-  const deviceName = req.body.deviceName || 'Android Device';
-  const manufacturer = req.body.manufacturer || 'Android';
-  const model = req.body.model || 'Device';
+// Admin claims / pairs a device from the web dashboard using a pairing code
+app.post(['/api/pairing/claim', '/api/devices/claim'], requireUser, pairingLimiter, ah(async (req, res) => {
+  const code = String(req.body.code || req.body.pairingCode || '').trim();
+  const deviceName = cleanMeta(req.body.deviceName || 'Android Device', 150);
+  const manufacturer = cleanMeta(req.body.manufacturer, 100) || 'Android';
+  const model = cleanMeta(req.body.model, 100) || 'Device';
 
   if (!code) {
     return res.status(400).json({ success: false, message: 'Pairing code is required' });
@@ -545,34 +695,37 @@ app.post(['/api/pairing/claim', '/api/devices/claim'], verifyToken, async (req, 
     }
   }
 
-  const deviceId = pairingRecord?.device_id || ('dev_' + Math.random().toString(36).substring(2, 10));
-  const deviceToken = generateToken({ deviceId, type: 'device' }, '365d');
-
-  if (pairingRecord) {
-    if (db.isPostgres()) {
-      await db.query(
-        'UPDATE pairing_codes SET used = TRUE, used_at = CURRENT_TIMESTAMP, device_id = $1 WHERE id = $2',
-        [deviceId, pairingRecord.id]
-      );
-    } else {
-      pairingRecord.used = true;
-      pairingRecord.used_at = now;
-      pairingRecord.device_id = deviceId;
-    }
+  // The code must belong to the requesting admin (no cross-user claiming).
+  if (!pairingRecord || String(pairingRecord.user_id) !== String(req.user.id)) {
+    return res.status(400).json({ success: false, message: 'Invalid, expired, or revoked pairing code.' });
+  }
+  if (pairingRecord.used) {
+    return res.status(400).json({ success: false, message: 'This pairing code has already been redeemed.' });
   }
 
+  const deviceId = pairingRecord.device_id || ('dev_' + crypto.randomBytes(8).toString('hex'));
+  const deviceToken = generateDeviceToken(deviceId);
+
   if (db.isPostgres()) {
+    await db.query(
+      'UPDATE pairing_codes SET used = TRUE, used_at = CURRENT_TIMESTAMP, device_id = $1 WHERE id = $2',
+      [deviceId, pairingRecord.id]
+    );
     await db.query(
       `INSERT INTO devices (id, user_id, device_name, manufacturer, model, os_version, sdk_version, app_version, auth_token, status, last_seen)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (id) DO UPDATE SET device_name = $3, auth_token = $9, status = $10, last_seen = $11`,
-      [deviceId, req.user.id, deviceName, manufacturer, model, '14', 34, '1.0', deviceToken, 'ONLINE', now]
+      [deviceId, req.user.id, deviceName, manufacturer, model, null, null, null, deviceToken, 'ENROLLED', now]
     );
     await db.query(
       `INSERT INTO device_permissions (device_id) VALUES ($1) ON CONFLICT (device_id) DO NOTHING`,
       [deviceId]
     );
   } else {
+    pairingRecord.used = true;
+    pairingRecord.used_at = now;
+    pairingRecord.device_id = deviceId;
+
     const store = db.getMemoryStore();
     store.devices.set(deviceId, {
       id: deviceId,
@@ -580,31 +733,32 @@ app.post(['/api/pairing/claim', '/api/devices/claim'], verifyToken, async (req, 
       device_name: deviceName,
       manufacturer,
       model,
-      os_version: '14',
-      sdk_version: 34,
-      app_version: '1.0',
+      os_version: null,
+      sdk_version: null,
+      app_version: null,
       auth_token: deviceToken,
-      status: 'ONLINE',
-      battery_level: 95,
+      status: 'ENROLLED',
+      // Truthful empty telemetry — the dashboard must not invent device state.
+      battery_level: null,
       is_charging: false,
-      storage_available: 48000000000,
-      storage_total: 128000000000,
-      ram_available: 4200000000,
-      ram_total: 8000000000,
-      network_type: 'Wi-Fi',
-      wifi_ssid: 'Monitory-WLAN',
-      uptime_millis: 3600000,
+      storage_available: 0,
+      storage_total: 0,
+      ram_available: 0,
+      ram_total: 0,
+      network_type: null,
+      wifi_ssid: null,
+      uptime_millis: 0,
       last_seen: now,
       created_at: now
     });
     store.device_permissions.set(deviceId, {
-      location: true,
-      notification_access: true,
-      files_access: true,
-      camera: true,
-      microphone: true,
-      usage_access: true,
-      screen_sharing: true
+      location: false,
+      notification_access: false,
+      files_access: false,
+      camera: false,
+      microphone: false,
+      usage_access: false,
+      screen_sharing: false
     });
   }
 
@@ -625,17 +779,30 @@ app.post(['/api/pairing/claim', '/api/devices/claim'], verifyToken, async (req, 
     token: deviceToken,
     serverUrl,
     wsUrl,
-    message: `Device "${deviceName}" paired successfully with code ${code}`
+    message: `Device "${deviceName}" enrolled with code ${code}. It will appear online when the device agent connects.`
   });
-});
+}));
 
-// Direct account-based device registration from Android app
-app.post('/api/devices/register-device', verifyToken, async (req, res) => {
+// Direct account-based device registration from the Android app
+app.post('/api/devices/register-device', requireUser, pairingLimiter, ah(async (req, res) => {
   const { deviceName, manufacturer, model, osVersion, sdkVersion, appVersion, deviceId: clientDeviceId } = req.body;
   const userId = req.user.id;
 
-  const deviceId = clientDeviceId || ('dev_' + Math.random().toString(36).substring(2, 10));
-  const deviceToken = generateToken({ deviceId, type: 'device' }, '365d');
+  const deviceId = clientDeviceId ? cleanMeta(clientDeviceId, 64) : ('dev_' + crypto.randomBytes(8).toString('hex'));
+
+  // Never hijack a device that is already registered to another account.
+  const existing = await (async () => {
+    if (db.isPostgres()) {
+      const r = await db.query('SELECT user_id FROM devices WHERE id = $1', [deviceId]);
+      return r.rows[0] || null;
+    }
+    return db.getMemoryStore().devices.get(deviceId) || null;
+  })();
+  if (existing && String(existing.user_id) !== String(userId)) {
+    return res.status(409).json({ success: false, error: 'Device id is already registered to another account' });
+  }
+
+  const deviceToken = generateDeviceToken(deviceId);
   const now = new Date();
 
   if (db.isPostgres()) {
@@ -643,7 +810,8 @@ app.post('/api/devices/register-device', verifyToken, async (req, res) => {
       `INSERT INTO devices (id, user_id, device_name, manufacturer, model, os_version, sdk_version, app_version, auth_token, status, last_seen)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (id) DO UPDATE SET device_name = $3, auth_token = $9, status = $10, last_seen = $11`,
-      [deviceId, userId, deviceName || 'Android Device', manufacturer, model, osVersion, sdkVersion || 34, appVersion || '1.0', deviceToken, 'ONLINE', now]
+      [deviceId, userId, cleanMeta(deviceName || 'Android Device', 150), cleanMeta(manufacturer, 100), cleanMeta(model, 100),
+       cleanMeta(osVersion, 50), asInt(sdkVersion, 34), cleanMeta(appVersion, 50), deviceToken, 'ENROLLED', now]
     );
     await db.query(
       `INSERT INTO device_permissions (device_id) VALUES ($1) ON CONFLICT (device_id) DO NOTHING`,
@@ -654,21 +822,21 @@ app.post('/api/devices/register-device', verifyToken, async (req, res) => {
     store.devices.set(deviceId, {
       id: deviceId,
       user_id: userId,
-      device_name: deviceName || 'Android Device',
-      manufacturer,
-      model,
-      os_version: osVersion,
-      sdk_version: sdkVersion || 34,
-      app_version: appVersion || '1.0',
+      device_name: cleanMeta(deviceName || 'Android Device', 150),
+      manufacturer: cleanMeta(manufacturer, 100),
+      model: cleanMeta(model, 100),
+      os_version: cleanMeta(osVersion, 50),
+      sdk_version: asInt(sdkVersion, 34),
+      app_version: cleanMeta(appVersion, 50),
       auth_token: deviceToken,
-      status: 'ONLINE',
-      battery_level: 100,
+      status: 'ENROLLED',
+      battery_level: null,
       is_charging: false,
       storage_available: 0,
       storage_total: 0,
       ram_available: 0,
       ram_total: 0,
-      network_type: 'Wi-Fi',
+      network_type: null,
       wifi_ssid: null,
       uptime_millis: 0,
       last_seen: now,
@@ -700,60 +868,62 @@ app.post('/api/devices/register-device', verifyToken, async (req, res) => {
     token: deviceToken,
     message: 'Device connected to your account successfully'
   });
-});
+}));
 
 // ==========================================
-// DEVICE MANAGEMENT ROUTES
+// DEVICE MANAGEMENT ROUTES (scoped to the requesting user)
 // ==========================================
-app.get('/api/devices', verifyToken, async (req, res) => {
+app.get('/api/devices', requireUser, ah(async (req, res) => {
   if (db.isPostgres()) {
     const result = await db.query(
-      'SELECT id, device_name, manufacturer, model, os_version, app_version, status, battery_level, is_charging, network_type, last_seen, created_at FROM devices ORDER BY last_seen DESC'
+      `SELECT id, device_name, manufacturer, model, os_version, app_version, status, battery_level, is_charging,
+              network_type, wifi_ssid, storage_available, storage_total, ram_available, ram_total, uptime_millis,
+              last_seen, created_at
+       FROM devices WHERE user_id = $1 ORDER BY last_seen DESC`,
+      [req.user.id]
     );
     res.json(result.rows);
   } else {
-    const devices = Array.from(db.getMemoryStore().devices.values());
+    const devices = Array.from(db.getMemoryStore().devices.values())
+      .filter(d => String(d.user_id) === String(req.user.id))
+      .map(sanitizeDevice);
     res.json(devices);
   }
-});
+}));
 
-app.get('/api/devices/:id', verifyToken, async (req, res) => {
+app.get('/api/devices/:id', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
   let device, permissions;
 
   if (db.isPostgres()) {
-    const devRes = await db.query('SELECT * FROM devices WHERE id = $1', [id]);
-    device = devRes.rows[0];
+    device = req.deviceRecord;
     const permRes = await db.query('SELECT * FROM device_permissions WHERE device_id = $1', [id]);
     permissions = permRes.rows[0];
   } else {
-    device = db.getMemoryStore().devices.get(id);
+    device = req.deviceRecord;
     permissions = db.getMemoryStore().device_permissions.get(id);
   }
 
-  if (!device) {
-    return res.status(404).json({ error: 'Device not found' });
-  }
-
   res.json({
-    ...device,
+    ...sanitizeDevice(device),
     permissions: permissions || {}
   });
-});
+}));
 
-app.delete('/api/devices/:id', verifyToken, async (req, res) => {
+app.delete('/api/devices/:id', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
-    await db.query('DELETE FROM devices WHERE id = $1', [id]);
+    await db.query('DELETE FROM devices WHERE id = $1 AND user_id = $2', [id, req.user.id]);
   } else {
     db.getMemoryStore().devices.delete(id);
+    db.getMemoryStore().device_permissions.delete(id);
   }
   logAudit(req.user.id, id, 'DEVICE_DELETED', {}, req.ip);
   wsManager.broadcastToDashboards({ type: 'DEVICE_DELETED', deviceId: id });
   res.json({ success: true });
-});
+}));
 
-app.delete('/api/devices/:id/disconnect', optionalAuth, async (req, res) => {
+app.delete('/api/devices/:id/disconnect', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
   const now = new Date();
   if (db.isPostgres()) {
@@ -766,17 +936,17 @@ app.delete('/api/devices/:id/disconnect', optionalAuth, async (req, res) => {
     }
   }
 
-  logAudit(req.user?.id, id, 'DEVICE_DISCONNECTED', {}, req.ip);
+  logAudit(req.user.id, id, 'DEVICE_DISCONNECTED', {}, req.ip);
   wsManager.broadcastToDashboards({ type: 'DEVICE_STATUS_CHANGED', deviceId: id, status: 'OFFLINE' });
   res.json({ success: true });
-});
+}));
 
 // ==========================================
-// TELEMETRY SYNC
+// TELEMETRY SYNC (device-authenticated)
 // ==========================================
-app.post('/api/devices/:id/telemetry', async (req, res) => {
+app.post('/api/devices/:id/telemetry', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
   const { id } = req.params;
-  const telemetry = req.body;
+  const telemetry = req.body || {};
   const now = new Date();
 
   if (db.isPostgres()) {
@@ -803,47 +973,49 @@ app.post('/api/devices/:id/telemetry', async (req, res) => {
         last_seen = EXCLUDED.last_seen`,
       [
         id,
-        telemetry.deviceName || 'Android Device',
-        telemetry.manufacturer || 'Android',
-        telemetry.model || 'Device',
-        telemetry.osVersion || 'Android',
-        telemetry.sdkVersion || 34,
-        telemetry.appVersion || '1.0',
-        telemetry.batteryLevel || 100,
+        cleanMeta(telemetry.deviceName, 150) || 'Android Device',
+        cleanMeta(telemetry.manufacturer, 100) || 'Android',
+        cleanMeta(telemetry.model, 100) || 'Device',
+        cleanMeta(telemetry.osVersion, 50) || 'Android',
+        asInt(telemetry.sdkVersion, 34),
+        cleanMeta(telemetry.appVersion, 50) || '1.0',
+        // `??` preserves a genuine 0% battery (|| 100 used to turn 0 into 100).
+        asInt(telemetry.batteryLevel, 0),
         telemetry.isCharging || false,
-        telemetry.storageAvailableBytes || 0,
-        telemetry.storageTotalBytes || 0,
-        telemetry.ramAvailableBytes || 0,
-        telemetry.ramTotalBytes || 0,
-        telemetry.networkType || 'WIFI',
-        telemetry.wifiSsid || '',
-        telemetry.uptimeMillis || 0,
+        asInt(telemetry.storageAvailableBytes, 0),
+        asInt(telemetry.storageTotalBytes, 0),
+        asInt(telemetry.ramAvailableBytes, 0),
+        asInt(telemetry.ramTotalBytes, 0),
+        cleanMeta(telemetry.networkType, 50) || 'WIFI',
+        cleanMeta(telemetry.wifiSsid, 100) || '',
+        asInt(telemetry.uptimeMillis, 0),
         now
       ]
     );
   } else {
     const dev = db.getMemoryStore().devices.get(id) || { id };
     Object.assign(dev, {
-      deviceName: telemetry.deviceName || dev.deviceName,
-      manufacturer: telemetry.manufacturer || dev.manufacturer,
-      model: telemetry.model || dev.model,
-      os_version: telemetry.osVersion || dev.os_version,
-      battery_level: telemetry.batteryLevel,
-      is_charging: telemetry.isCharging,
-      storage_available: telemetry.storageAvailableBytes,
-      storage_total: telemetry.storageTotalBytes,
-      ram_available: telemetry.ramAvailableBytes,
-      ram_total: telemetry.ramTotalBytes,
-      network_type: telemetry.networkType,
-      wifi_ssid: telemetry.wifiSsid,
-      uptime_millis: telemetry.uptimeMillis,
+      // Consistent snake_case field naming in the memory store.
+      device_name: telemetry.deviceName ? cleanMeta(telemetry.deviceName, 150) : (dev.device_name || 'Android Device'),
+      manufacturer: telemetry.manufacturer ? cleanMeta(telemetry.manufacturer, 100) : dev.manufacturer,
+      model: telemetry.model ? cleanMeta(telemetry.model, 100) : dev.model,
+      os_version: telemetry.osVersion ? cleanMeta(telemetry.osVersion, 50) : dev.os_version,
+      battery_level: telemetry.batteryLevel !== undefined && telemetry.batteryLevel !== null
+        ? asInt(telemetry.batteryLevel, 0) : (dev.battery_level ?? null),
+      is_charging: telemetry.isCharging !== undefined ? !!telemetry.isCharging : dev.is_charging,
+      storage_available: asInt(telemetry.storageAvailableBytes, dev.storage_available ?? 0),
+      storage_total: asInt(telemetry.storageTotalBytes, dev.storage_total ?? 0),
+      ram_available: asInt(telemetry.ramAvailableBytes, dev.ram_available ?? 0),
+      ram_total: asInt(telemetry.ramTotalBytes, dev.ram_total ?? 0),
+      network_type: telemetry.networkType ? cleanMeta(telemetry.networkType, 50) : dev.network_type,
+      wifi_ssid: telemetry.wifiSsid !== undefined ? cleanMeta(telemetry.wifiSsid, 100) : dev.wifi_ssid,
+      uptime_millis: asInt(telemetry.uptimeMillis, dev.uptime_millis ?? 0),
       status: 'ONLINE',
       last_seen: now
     });
     db.getMemoryStore().devices.set(id, dev);
   }
 
-  // Broadcast to all active admin dashboards in real time!
   wsManager.broadcastToDashboards({
     type: 'DEVICE_TELEMETRY_UPDATED',
     deviceId: id,
@@ -851,32 +1023,36 @@ app.post('/api/devices/:id/telemetry', async (req, res) => {
   });
 
   res.json({ success: true });
-});
+}));
 
 // ==========================================
-// LOCATION TRACKING
+// LOCATION TRACKING (device-authenticated)
 // ==========================================
-app.post('/api/devices/:id/location', async (req, res) => {
+app.post('/api/devices/:id/location', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
   const { id } = req.params;
   const { latitude, longitude, accuracy, altitude, speed, provider, timestamp } = req.body;
+
+  if (latitude === undefined || longitude === undefined || !Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) {
+    return res.status(400).json({ error: 'Valid latitude and longitude required' });
+  }
 
   if (db.isPostgres()) {
     await db.query(
       `INSERT INTO locations (device_id, latitude, longitude, accuracy, altitude, speed, provider, timestamp)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [id, latitude, longitude, accuracy, altitude || null, speed || null, provider || null, timestamp || Date.now()]
+      [id, Number(latitude), Number(longitude), asInt(accuracy, 0), asInt(altitude, null), asInt(speed, null), cleanMeta(provider, 50), asInt(timestamp, Date.now())]
     );
   } else {
     db.getMemoryStore().locations.push({
       id: Date.now(),
       device_id: id,
-      latitude,
-      longitude,
-      accuracy,
-      altitude,
-      speed,
-      provider,
-      timestamp: timestamp || Date.now(),
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      accuracy: asInt(accuracy, 0),
+      altitude: asInt(altitude, null),
+      speed: asInt(speed, null),
+      provider: cleanMeta(provider, 50),
+      timestamp: asInt(timestamp, Date.now()),
       created_at: new Date()
     });
   }
@@ -897,8 +1073,8 @@ app.post('/api/devices/:id/location', async (req, res) => {
       const phi2 = Number(fence.latitude) * Math.PI / 180;
       const deltaPhi = (Number(fence.latitude) - Number(latitude)) * Math.PI / 180;
       const deltaLambda = (Number(fence.longitude) - Number(longitude)) * Math.PI / 180;
-      const a = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) + Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda/2) * Math.sin(deltaLambda/2);
-      const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) + Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+      const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       const isInside = dist <= (Number(fence.radius_meters) || 500);
 
       const prevStatus = fence.last_status || 'UNKNOWN';
@@ -952,15 +1128,15 @@ app.post('/api/devices/:id/location', async (req, res) => {
   wsManager.broadcastToDashboards({
     type: 'DEVICE_LOCATION_UPDATED',
     deviceId: id,
-    location: { latitude, longitude, accuracy, altitude, speed, timestamp: timestamp || Date.now() }
+    location: { latitude: Number(latitude), longitude: Number(longitude), accuracy, altitude, speed, timestamp: timestamp || Date.now() }
   });
 
   res.json({ success: true });
-});
+}));
 
-app.get('/api/devices/:id/locations', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/locations', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
-  const limit = parseInt(req.query.limit) || 100;
+  const limit = Math.min(Math.max(parseInt(req.query.limit) || 100, 1), 500);
 
   if (db.isPostgres()) {
     const result = await db.query(
@@ -975,20 +1151,20 @@ app.get('/api/devices/:id/locations', verifyToken, async (req, res) => {
       .slice(0, limit);
     res.json(locs);
   }
-});
+}));
 
 // ==========================================
-// NOTIFICATIONS CAPTURE
+// NOTIFICATIONS CAPTURE (device-authenticated)
 // ==========================================
-app.post('/api/devices/:id/notifications', async (req, res) => {
+app.post('/api/devices/:id/notifications', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
   const { id } = req.params;
-  const notif = req.body;
+  const notif = req.body || {};
 
-  const pkg = notif.packageName || 'unknown';
-  const title = notif.title || '';
-  const text = notif.text || '';
-  const postTime = notif.postTime || Date.now();
-  const notifId = notif.id || `${id}_${pkg}_${title.slice(0, 30)}_${postTime}`;
+  const pkg = cleanMeta(notif.packageName, 255) || 'unknown';
+  const title = cleanMeta(notif.title, 500) || '';
+  const text = cleanMeta(notif.text, 4000) || '';
+  const postTime = asInt(notif.postTime, Date.now());
+  const notifId = cleanMeta(notif.id, 100) || `${id}_${pkg}_${title.slice(0, 30)}_${postTime}`;
 
   let isNew = false;
 
@@ -1000,7 +1176,7 @@ app.post('/api/devices/:id/notifications', async (req, res) => {
         `INSERT INTO notifications (id, device_id, package_name, app_name, title, text, category, post_time)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text, post_time = EXCLUDED.post_time`,
-        [notifId, id, pkg, notif.appName || pkg, title, text, notif.category || null, postTime]
+        [notifId, id, pkg, cleanMeta(notif.appName, 255) || pkg, title, text, cleanMeta(notif.category, 100), postTime]
       );
     } else {
       await db.query(
@@ -1024,42 +1200,45 @@ app.post('/api/devices/:id/notifications', async (req, res) => {
         id: notifId,
         device_id: id,
         package_name: pkg,
-        app_name: notif.appName || pkg,
+        app_name: cleanMeta(notif.appName, 255) || pkg,
         title,
         text,
-        category: notif.category || null,
+        category: cleanMeta(notif.category, 100),
         post_time: postTime,
         created_at: new Date()
       });
     }
   }
 
-  const broadcastPayload = { ...notif, id: notifId };
   wsManager.broadcastToDashboards({
     type: 'DEVICE_NOTIFICATION_RECEIVED',
     deviceId: id,
-    notification: broadcastPayload,
+    notification: { packageName: pkg, appName: notif.appName || pkg, title, text, postTime, id: notifId },
     isNew
   });
 
   res.json({ success: true, isNew, id: notifId });
-});
+}));
 
-app.get('/api/devices/:id/notifications', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/notifications', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
   const search = req.query.search;
-  const limit = parseInt(req.query.limit) || 50;
+  const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 500);
 
   if (db.isPostgres()) {
-    let query = 'SELECT * FROM notifications WHERE device_id = $1';
-    const params = [id];
     if (search) {
-      query += ' AND (title ILIKE $2 OR text ILIKE $2 OR app_name ILIKE $2)';
-      params.push(`%${search}%`);
+      const result = await db.query(
+        'SELECT * FROM notifications WHERE device_id = $1 AND (title ILIKE $2 OR text ILIKE $2 OR app_name ILIKE $2) ORDER BY post_time DESC LIMIT $3',
+        [id, `%${search}%`, limit]
+      );
+      res.json(result.rows);
+    } else {
+      const result = await db.query(
+        'SELECT * FROM notifications WHERE device_id = $1 ORDER BY post_time DESC LIMIT $2',
+        [id, limit]
+      );
+      res.json(result.rows);
     }
-    query += ` ORDER BY post_time DESC LIMIT ${limit}`;
-    const result = await db.query(query, params);
-    res.json(result.rows);
   } else {
     let list = db.getMemoryStore().notifications.filter(n => n.device_id === id);
     if (search) {
@@ -1068,9 +1247,9 @@ app.get('/api/devices/:id/notifications', verifyToken, async (req, res) => {
     }
     res.json(list.slice(0, limit));
   }
-});
+}));
 
-app.delete('/api/devices/:id/notifications/:notifId', verifyToken, async (req, res) => {
+app.delete('/api/devices/:id/notifications/:notifId', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id, notifId } = req.params;
   if (db.isPostgres()) {
     await db.query('DELETE FROM notifications WHERE id = $1 AND device_id = $2', [notifId, id]);
@@ -1080,90 +1259,101 @@ app.delete('/api/devices/:id/notifications/:notifId', verifyToken, async (req, r
     if (idx !== -1) list.splice(idx, 1);
   }
   res.json({ success: true });
-});
+}));
 
 // ==========================================
-// APPLICATION INVENTORY
+// APPLICATION INVENTORY (device-authenticated)
 // ==========================================
-app.post('/api/devices/:id/apps', async (req, res) => {
+app.post('/api/devices/:id/apps', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
   const { id } = req.params;
-  const apps = req.body; // Array of AppInfoData
+  const apps = req.body;
 
-  if (Array.isArray(apps)) {
-    if (db.isPostgres()) {
-      for (const app of apps) {
-        await db.query(
-          `INSERT INTO applications (device_id, package_name, app_name, version_name, version_code, is_system_app, first_install_time, last_update_time, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
-           ON CONFLICT (device_id, package_name) DO UPDATE SET
-            app_name = $3, version_name = $4, version_code = $5, is_system_app = $6, last_update_time = $8, updated_at = CURRENT_TIMESTAMP`,
-          [id, app.packageName, app.appName, app.versionName, app.versionCode, app.isSystemApp, app.firstInstallTime, app.lastUpdateTime]
-        );
-      }
-    } else {
-      db.getMemoryStore().applications.set(id, apps);
+  if (!Array.isArray(apps)) {
+    return res.status(400).json({ error: 'Expected an array of applications' });
+  }
+
+  if (db.isPostgres()) {
+    for (const app of apps.slice(0, 2000)) {
+      await db.query(
+        `INSERT INTO applications (device_id, package_name, app_name, version_name, version_code, is_system_app, first_install_time, last_update_time, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+         ON CONFLICT (device_id, package_name) DO UPDATE SET
+          app_name = $3, version_name = $4, version_code = $5, is_system_app = $6, last_update_time = $8, updated_at = CURRENT_TIMESTAMP`,
+        [id, cleanMeta(app.packageName, 255), cleanMeta(app.appName, 255), cleanMeta(app.versionName, 100), asInt(app.versionCode, 0), app.isSystemApp || false, asInt(app.firstInstallTime, 0), asInt(app.lastUpdateTime, 0)]
+      );
     }
+  } else {
+    db.getMemoryStore().applications.set(id, apps.slice(0, 2000));
   }
 
   res.json({ success: true, count: apps.length });
-});
+}));
 
-app.get('/api/devices/:id/apps', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/apps', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
   const search = req.query.search;
 
   if (db.isPostgres()) {
-    let query = 'SELECT * FROM applications WHERE device_id = $1';
-    const params = [id];
     if (search) {
-      query += ' AND (app_name ILIKE $2 OR package_name ILIKE $2)';
-      params.push(`%${search}%`);
+      const result = await db.query(
+        'SELECT * FROM applications WHERE device_id = $1 AND (app_name ILIKE $2 OR package_name ILIKE $2) ORDER BY is_system_app ASC, app_name ASC',
+        [id, `%${search}%`]
+      );
+      res.json(result.rows);
+    } else {
+      const result = await db.query(
+        'SELECT * FROM applications WHERE device_id = $1 ORDER BY is_system_app ASC, app_name ASC',
+        [id]
+      );
+      res.json(result.rows);
     }
-    query += ' ORDER BY is_system_app ASC, app_name ASC';
-    const result = await db.query(query, params);
-    res.json(result.rows);
   } else {
     let list = db.getMemoryStore().applications.get(id) || [];
     if (search) {
       const s = search.toLowerCase();
-      list = list.filter(a => a.appName.toLowerCase().includes(s) || a.packageName.toLowerCase().includes(s));
+      list = list.filter(a => (a.appName || '').toLowerCase().includes(s) || (a.packageName || '').toLowerCase().includes(s));
     }
     res.json(list);
   }
-});
+}));
 
 // ==========================================
-// USAGE STATISTICS
+// USAGE STATISTICS (device-authenticated)
 // ==========================================
-app.post('/api/devices/:id/usage', async (req, res) => {
+app.post('/api/devices/:id/usage', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
   const { id } = req.params;
   const usageList = req.body;
 
-  if (Array.isArray(usageList)) {
-    if (db.isPostgres()) {
-      for (const u of usageList) {
-        await db.query(
-          `INSERT INTO usage_statistics (device_id, package_name, app_name, total_time_ms, last_time_used)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [id, u.packageName, u.appName, u.totalTimeInForegroundMs, u.lastTimeUsed]
-        );
-      }
-    } else {
-      db.getMemoryStore().usage_statistics = usageList.map(u => ({
-        device_id: id,
-        package_name: u.packageName,
-        app_name: u.appName,
-        total_time_ms: u.totalTimeInForegroundMs,
-        last_time_used: u.lastTimeUsed,
-        recorded_at: new Date()
-      }));
+  if (!Array.isArray(usageList)) {
+    return res.status(400).json({ error: 'Expected an array of usage entries' });
+  }
+
+  if (db.isPostgres()) {
+    for (const u of usageList.slice(0, 2000)) {
+      await db.query(
+        `INSERT INTO usage_statistics (device_id, package_name, app_name, total_time_ms, last_time_used)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, cleanMeta(u.packageName, 255), cleanMeta(u.appName, 255), asInt(u.totalTimeInForegroundMs, 0), asInt(u.lastTimeUsed, 0)]
+      );
     }
+  } else {
+    // Replace ONLY this device's stats (previously clobbered every device's).
+    const store = db.getMemoryStore();
+    const fresh = usageList.slice(0, 2000).map(u => ({
+      device_id: id,
+      package_name: cleanMeta(u.packageName, 255),
+      app_name: cleanMeta(u.appName, 255),
+      total_time_ms: asInt(u.totalTimeInForegroundMs, 0),
+      last_time_used: asInt(u.lastTimeUsed, 0),
+      recorded_at: new Date()
+    }));
+    store.usage_statistics = store.usage_statistics.filter(u => u.device_id !== id).concat(fresh);
   }
 
   res.json({ success: true });
-});
+}));
 
-app.get('/api/devices/:id/usage', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/usage', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query(
@@ -1174,384 +1364,282 @@ app.get('/api/devices/:id/usage', verifyToken, async (req, res) => {
   } else {
     res.json(db.getMemoryStore().usage_statistics.filter(u => u.device_id === id));
   }
-});
+}));
 
 // ==========================================
-// FILE EXPLORER SERVICES
+// FILE EXPLORER SERVICES (device-authenticated)
 // ==========================================
-app.post('/api/devices/:id/files', async (req, res) => {
-  const { id } = req.params;
-  const list = req.body; // Array of file metadata
-  if (Array.isArray(list)) {
-    try {
-      if (db.isPostgres()) {
-        await db.query('DELETE FROM files WHERE device_id = $1', [id]);
-        for (const f of list) {
-          await db.query(
-            `INSERT INTO files (device_id, file_name, file_path, file_size, mime_type, is_directory)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [id, f.fileName, f.filePath, f.fileSize || 0, f.mimeType, f.isDirectory || false]
-          );
-        }
-      } else {
-        const store = db.getMemoryStore();
-        store.files = store.files.filter(f => f.device_id !== id);
-        list.forEach(f => {
-          store.files.push({
-            id: Date.now() + Math.random(),
-            device_id: id,
-            file_name: f.fileName,
-            file_path: f.filePath,
-            file_size: f.fileSize || 0,
-            mime_type: f.mimeType,
-            is_directory: f.isDirectory || false,
-            created_at: new Date()
-          });
-        });
-      }
-      wsManager.broadcastToDashboards({ type: 'DEVICE_FILES_RECEIVED', deviceId: id });
-    } catch (e) {
-      console.error('Error saving files list:', e);
-    }
-  }
-  res.json({ success: true });
-});
-
-app.get('/api/devices/:id/files', verifyToken, async (req, res) => {
-  const { id } = req.params;
-  try {
-    if (db.isPostgres()) {
-      const result = await db.query('SELECT * FROM files WHERE device_id = $1 ORDER BY is_directory DESC, file_name ASC', [id]);
-      res.json(result.rows);
-    } else {
-      res.json(db.getMemoryStore().files.filter(f => f.device_id === id));
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================================
-// SMS LOGGING SERVICES
-// ==========================================
-app.post('/api/devices/:id/sms', async (req, res) => {
-  const { id } = req.params;
-  const list = req.body; // Array of SMS records
-  if (Array.isArray(list)) {
-    try {
-      if (db.isPostgres()) {
-        for (const s of list) {
-          await db.query(
-            `INSERT INTO sms (device_id, address, body, type, timestamp)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [id, s.address, s.body, s.type || 'INBOX', s.timestamp]
-          );
-        }
-      } else {
-        const store = db.getMemoryStore().sms;
-        list.forEach(s => {
-          store.unshift({
-            id: Date.now() + Math.random(),
-            device_id: id,
-            address: s.address,
-            body: s.body,
-            type: s.type || 'INBOX',
-            timestamp: s.timestamp,
-            created_at: new Date()
-          });
-        });
-      }
-      wsManager.broadcastToDashboards({ type: 'DEVICE_SMS_RECEIVED', deviceId: id });
-    } catch (e) {
-      console.error('Error saving SMS:', e);
-    }
-  }
-  res.json({ success: true });
-});
-
-app.get('/api/devices/:id/sms', verifyToken, async (req, res) => {
-  const { id } = req.params;
-  try {
-    if (db.isPostgres()) {
-      const result = await db.query('SELECT * FROM sms WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 200', [id]);
-      res.json(result.rows);
-    } else {
-      res.json(db.getMemoryStore().sms.filter(s => s.device_id === id));
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================================
-// CALL LOGGING SERVICES
-// ==========================================
-app.post('/api/devices/:id/calls', async (req, res) => {
+app.post('/api/devices/:id/files', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
   const { id } = req.params;
   const list = req.body;
-  if (Array.isArray(list)) {
-    try {
-      if (db.isPostgres()) {
-        for (const c of list) {
-          await db.query(
-            `INSERT INTO calls (device_id, number, name, type, duration, timestamp)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [id, c.number, c.name, c.type || 'INCOMING', c.duration || 0, c.timestamp]
-          );
-        }
-      } else {
-        const store = db.getMemoryStore().calls;
-        list.forEach(c => {
-          store.unshift({
-            id: Date.now() + Math.random(),
-            device_id: id,
-            number: c.number,
-            name: c.name,
-            type: c.type || 'INCOMING',
-            duration: c.duration || 0,
-            timestamp: c.timestamp,
-            created_at: new Date()
-          });
-        });
-      }
-      wsManager.broadcastToDashboards({ type: 'DEVICE_CALLS_RECEIVED', deviceId: id });
-    } catch (e) {
-      console.error('Error saving Call Logs:', e);
-    }
+  if (!Array.isArray(list)) {
+    return res.status(400).json({ error: 'Expected an array of file metadata' });
   }
+  if (db.isPostgres()) {
+    await db.query('DELETE FROM files WHERE device_id = $1', [id]);
+    for (const f of list.slice(0, 5000)) {
+      await db.query(
+        `INSERT INTO files (device_id, file_name, file_path, file_size, mime_type, is_directory)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [id, cleanMeta(f.fileName, 255), cleanMeta(f.filePath, 1024), asInt(f.fileSize, 0), cleanMeta(f.mimeType, 100), f.isDirectory || false]
+      );
+    }
+  } else {
+    const store = db.getMemoryStore();
+    store.files = store.files.filter(f => f.device_id !== id);
+    list.slice(0, 5000).forEach(f => {
+      store.files.push({
+        id: Date.now() + Math.random(),
+        device_id: id,
+        file_name: cleanMeta(f.fileName, 255),
+        file_path: cleanMeta(f.filePath, 1024),
+        file_size: asInt(f.fileSize, 0),
+        mime_type: cleanMeta(f.mimeType, 100),
+        is_directory: f.isDirectory || false,
+        created_at: new Date()
+      });
+    });
+  }
+  wsManager.broadcastToDashboards({ type: 'DEVICE_FILES_RECEIVED', deviceId: id });
   res.json({ success: true });
-});
+}));
 
-app.get('/api/devices/:id/calls', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/files', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
-  try {
-    if (db.isPostgres()) {
-      const result = await db.query('SELECT * FROM calls WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 200', [id]);
-      res.json(result.rows);
-    } else {
-      res.json(db.getMemoryStore().calls.filter(c => c.device_id === id));
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  if (db.isPostgres()) {
+    const result = await db.query('SELECT * FROM files WHERE device_id = $1 ORDER BY is_directory DESC, file_name ASC', [id]);
+    res.json(result.rows);
+  } else {
+    res.json(db.getMemoryStore().files.filter(f => f.device_id === id));
   }
-});
+}));
 
 // ==========================================
-// CONTACT LIST MANAGEMENT
+// SMS / CALLS / CONTACTS / KEYSTROKES
 // ==========================================
-app.post('/api/devices/:id/contacts', async (req, res) => {
-  const { id } = req.params;
-  const list = req.body;
-  if (Array.isArray(list)) {
-    try {
-      if (db.isPostgres()) {
-        await db.query('DELETE FROM contacts WHERE device_id = $1', [id]);
-        for (const c of list) {
-          await db.query(
-            `INSERT INTO contacts (device_id, name, phone, email)
-             VALUES ($1, $2, $3, $4)`,
-            [id, c.name, c.phone, c.email]
-          );
-        }
-      } else {
-        const store = db.getMemoryStore();
+function makeIngestListRoute({ path: routePath, table, mapRow, broadcastType, memoryKey }) {
+  app.post(routePath, ingestLimiter, deviceDataAuth, ah(async (req, res) => {
+    const { id } = req.params;
+    const list = req.body;
+    if (!Array.isArray(list)) {
+      return res.status(400).json({ error: 'Expected an array of records' });
+    }
+    if (db.isPostgres()) {
+      for (const item of list.slice(0, 2000)) {
+        await db.query(mapRow.pg, [id, ...mapRow.values(item)]);
+      }
+    } else {
+      const store = db.getMemoryStore();
+      if (memoryKey === 'contacts') {
         store.contacts = store.contacts.filter(c => c.device_id !== id);
-        list.forEach(c => {
-          store.contacts.push({
-            id: Date.now() + Math.random(),
-            device_id: id,
-            name: c.name,
-            phone: c.phone,
-            email: c.email
-          });
-        });
       }
-      wsManager.broadcastToDashboards({ type: 'DEVICE_CONTACTS_RECEIVED', deviceId: id });
-    } catch (e) {
-      console.error('Error saving Contacts:', e);
+      list.slice(0, 2000).forEach(item => {
+        store[memoryKey].push({ id: Date.now() + Math.random(), device_id: id, ...mapRow.memory(item), created_at: new Date() });
+      });
     }
+    wsManager.broadcastToDashboards({ type: broadcastType, deviceId: id });
+    res.json({ success: true });
+  }));
+}
+
+makeIngestListRoute({
+  path: '/api/devices/:id/sms',
+  table: 'sms',
+  broadcastType: 'DEVICE_SMS_RECEIVED',
+  memoryKey: 'sms',
+  mapRow: {
+    pg: 'INSERT INTO sms (device_id, address, body, type, timestamp) VALUES ($1, $2, $3, $4, $5)',
+    values: (s) => [cleanMeta(s.address, 100), cleanMeta(s.body, 4000), cleanMeta(s.type, 20) || 'INBOX', asInt(s.timestamp, Date.now())],
+    memory: (s) => ({ address: cleanMeta(s.address, 100), body: cleanMeta(s.body, 4000), type: cleanMeta(s.type, 20) || 'INBOX', timestamp: asInt(s.timestamp, Date.now()) })
   }
-  res.json({ success: true });
 });
 
-app.get('/api/devices/:id/contacts', verifyToken, async (req, res) => {
-  const { id } = req.params;
-  try {
+makeIngestListRoute({
+  path: '/api/devices/:id/calls',
+  table: 'calls',
+  broadcastType: 'DEVICE_CALLS_RECEIVED',
+  memoryKey: 'calls',
+  mapRow: {
+    pg: 'INSERT INTO calls (device_id, number, name, type, duration, timestamp) VALUES ($1, $2, $3, $4, $5, $6)',
+    values: (c) => [cleanMeta(c.number, 100), cleanMeta(c.name, 150), cleanMeta(c.type, 50) || 'INCOMING', asInt(c.duration, 0), asInt(c.timestamp, Date.now())],
+    memory: (c) => ({ number: cleanMeta(c.number, 100), name: cleanMeta(c.name, 150), type: cleanMeta(c.type, 50) || 'INCOMING', duration: asInt(c.duration, 0), timestamp: asInt(c.timestamp, Date.now()) })
+  }
+});
+
+makeIngestListRoute({
+  path: '/api/devices/:id/contacts',
+  table: 'contacts',
+  broadcastType: 'DEVICE_CONTACTS_RECEIVED',
+  memoryKey: 'contacts',
+  mapRow: {
+    pg: 'INSERT INTO contacts (device_id, name, phone, email) VALUES ($1, $2, $3, $4)',
+    values: (c) => [cleanMeta(c.name, 150), cleanMeta(c.phone, 100), cleanMeta(c.email, 255)],
+    memory: (c) => ({ name: cleanMeta(c.name, 150), phone: cleanMeta(c.phone, 100), email: cleanMeta(c.email, 255) })
+  }
+});
+
+makeIngestListRoute({
+  path: '/api/devices/:id/keystrokes',
+  table: 'keystrokes',
+  broadcastType: 'DEVICE_KEYSTROKES_RECEIVED',
+  memoryKey: 'keystrokes',
+  mapRow: {
+    pg: 'INSERT INTO keystrokes (device_id, app_package, app_name, text, timestamp) VALUES ($1, $2, $3, $4, $5)',
+    values: (k) => [cleanMeta(k.appPackage, 255), cleanMeta(k.appName, 255), cleanMeta(k.text, 4000), asInt(k.timestamp, Date.now())],
+    memory: (k) => ({ app_package: cleanMeta(k.appPackage, 255), app_name: cleanMeta(k.appName, 255), text: cleanMeta(k.text, 4000), timestamp: asInt(k.timestamp, Date.now()) })
+  }
+});
+
+for (const [route, memoryKey, selectSql] of [
+  ['/api/devices/:id/sms', 'sms', 'SELECT * FROM sms WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 200'],
+  ['/api/devices/:id/calls', 'calls', 'SELECT * FROM calls WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 200'],
+  ['/api/devices/:id/contacts', 'contacts', 'SELECT * FROM contacts WHERE device_id = $1 ORDER BY name ASC'],
+  ['/api/devices/:id/keystrokes', 'keystrokes', 'SELECT * FROM keystrokes WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 200']
+]) {
+  app.get(route, requireUser, requireDeviceOwner, ah(async (req, res) => {
+    const { id } = req.params;
     if (db.isPostgres()) {
-      const result = await db.query('SELECT * FROM contacts WHERE device_id = $1 ORDER BY name ASC', [id]);
+      const result = await db.query(selectSql, [id]);
       res.json(result.rows);
     } else {
-      res.json(db.getMemoryStore().contacts.filter(c => c.device_id === id));
+      res.json(db.getMemoryStore()[memoryKey].filter(r => r.device_id === id));
     }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================================
-// KEYSTROKE CAPTURE LOGS
-// ==========================================
-app.post('/api/devices/:id/keystrokes', async (req, res) => {
-  const { id } = req.params;
-  const list = req.body;
-  if (Array.isArray(list)) {
-    try {
-      if (db.isPostgres()) {
-        for (const k of list) {
-          await db.query(
-            `INSERT INTO keystrokes (device_id, app_package, app_name, text, timestamp)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [id, k.appPackage, k.appName, k.text, k.timestamp]
-          );
-        }
-      } else {
-        const store = db.getMemoryStore().keystrokes;
-        list.forEach(k => {
-          store.unshift({
-            id: Date.now() + Math.random(),
-            device_id: id,
-            app_package: k.appPackage,
-            app_name: k.appName,
-            text: k.text,
-            timestamp: k.timestamp,
-            created_at: new Date()
-          });
-        });
-      }
-      wsManager.broadcastToDashboards({ type: 'DEVICE_KEYSTROKES_RECEIVED', deviceId: id });
-    } catch (e) {
-      console.error('Error saving Keystrokes:', e);
-    }
-  }
-  res.json({ success: true });
-});
-
-app.get('/api/devices/:id/keystrokes', verifyToken, async (req, res) => {
-  const { id } = req.params;
-  try {
-    if (db.isPostgres()) {
-      const result = await db.query('SELECT * FROM keystrokes WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 200', [id]);
-      res.json(result.rows);
-    } else {
-      res.json(db.getMemoryStore().keystrokes.filter(k => k.device_id === id));
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
+  }));
+}
 
 // ==========================================
 // PERMISSIONS
 // ==========================================
-app.get('/api/devices/:id/permissions', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/permissions', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
-  try {
-    if (db.isPostgres()) {
-      const result = await db.query('SELECT * FROM device_permissions WHERE device_id = $1', [id]);
-      if (result.rows.length > 0) {
-        const row = result.rows[0];
-        res.json({
-          location: row.location,
-          notificationAccess: row.notification_access,
-          filesAccess: row.files_access,
-          camera: row.camera,
-          microphone: row.microphone,
-          usageAccess: row.usage_access,
-          screenSharing: row.screen_sharing,
-          contacts: row.contacts || false,
-          calls: row.calls || false,
-          sms: row.sms || false
-        });
-      } else {
-        res.json({
-          location: false,
-          notificationAccess: false,
-          filesAccess: false,
-          camera: false,
-          microphone: false,
-          usageAccess: false,
-          screenSharing: false,
-          contacts: false,
-          calls: false,
-          sms: false
-        });
-      }
+  const defaults = {
+    location: false,
+    notificationAccess: false,
+    filesAccess: false,
+    camera: false,
+    microphone: false,
+    usageAccess: false,
+    screenSharing: false,
+    contacts: false,
+    calls: false,
+    sms: false
+  };
+  if (db.isPostgres()) {
+    const result = await db.query('SELECT * FROM device_permissions WHERE device_id = $1', [id]);
+    if (result.rows.length > 0) {
+      const row = result.rows[0];
+      res.json({
+        location: row.location,
+        notificationAccess: row.notification_access,
+        filesAccess: row.files_access,
+        camera: row.camera,
+        microphone: row.microphone,
+        usageAccess: row.usage_access,
+        screenSharing: row.screen_sharing,
+        contacts: row.contacts || false,
+        calls: row.calls || false,
+        sms: row.sms || false
+      });
     } else {
-      const perms = db.getMemoryStore().device_permissions.get(id) || {
-        location: false,
-        notificationAccess: false,
-        filesAccess: false,
-        camera: false,
-        microphone: false,
-        usageAccess: false,
-        screenSharing: false,
-        contacts: false,
-        calls: false,
-        sms: false
-      };
-      res.json(perms);
+      res.json(defaults);
     }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } else {
+    const perms = db.getMemoryStore().device_permissions.get(id) || defaults;
+    res.json(perms);
   }
-});
+}));
 
-app.put('/api/devices/:id/permissions', async (req, res) => {
+// Device agents report their permission state (device token), admins can set it.
+app.put('/api/devices/:id/permissions', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
   const { id } = req.params;
-  const perms = req.body;
+  const perms = req.body || {};
 
-  try {
-    if (db.isPostgres()) {
-      await db.query(
-        `INSERT INTO device_permissions (device_id, location, notification_access, files_access, camera, microphone, usage_access, screen_sharing, contacts, calls, sms, accessibility, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
-         ON CONFLICT (device_id) DO UPDATE SET
-          location = $2, notification_access = $3, files_access = $4, camera = $5, microphone = $6, usage_access = $7, screen_sharing = $8,
-          contacts = $9, calls = $10, sms = $11, accessibility = $12, updated_at = CURRENT_TIMESTAMP`,
-        [
-          id, 
-          perms.location, 
-          perms.notificationAccess || false, 
-          perms.filesAccess || false, 
-          perms.camera || false, 
-          perms.microphone || false, 
-          perms.usageAccess || false, 
-          perms.screenSharing || false, 
-          perms.contacts || false, 
-          perms.calls || false, 
-          perms.sms || false,
-          perms.accessibility || false
-        ]
-      );
-    } else {
-      db.getMemoryStore().device_permissions.set(id, perms);
-    }
-
-    wsManager.broadcastToDashboards({
-      type: 'DEVICE_PERMISSIONS_UPDATED',
-      deviceId: id,
-      permissions: perms
-    });
-
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  if (db.isPostgres()) {
+    await db.query(
+      `INSERT INTO device_permissions (device_id, location, notification_access, files_access, camera, microphone, usage_access, screen_sharing, contacts, calls, sms, accessibility, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+       ON CONFLICT (device_id) DO UPDATE SET
+        location = $2, notification_access = $3, files_access = $4, camera = $5, microphone = $6, usage_access = $7, screen_sharing = $8,
+        contacts = $9, calls = $10, sms = $11, accessibility = $12, updated_at = CURRENT_TIMESTAMP`,
+      [
+        id,
+        perms.location || false,
+        perms.notificationAccess || false,
+        perms.filesAccess || false,
+        perms.camera || false,
+        perms.microphone || false,
+        perms.usageAccess || false,
+        perms.screenSharing || false,
+        perms.contacts || false,
+        perms.calls || false,
+        perms.sms || false,
+        perms.accessibility || false
+      ]
+    );
+  } else {
+    db.getMemoryStore().device_permissions.set(id, perms);
   }
-});
+
+  wsManager.broadcastToDashboards({
+    type: 'DEVICE_PERMISSIONS_UPDATED',
+    deviceId: id,
+    permissions: perms
+  });
+
+  res.json({ success: true });
+}));
 
 // ==========================================
 // COMMAND DISPATCH SYSTEM
 // ==========================================
-app.post('/api/devices/:id/commands', verifyToken, async (req, res) => {
+const ALLOWED_COMMAND_TYPES = new Set([
+  'REFRESH_TELEMETRY', 'REQUEST_LOCATION', 'REQUEST_APPS', 'REQUEST_USAGE',
+  'SYNC_DEVICE', 'SYNC_FILES', 'SYNC_NOTIFICATIONS', 'SYNC_CONTACTS',
+  'SYNC_APPLICATIONS', 'SYNC_USAGE', 'SYNC_SMS', 'SYNC_CALLS', 'SYNC_KEYSTROKES',
+  'REFRESH_PERMISSIONS', 'SEND_NOTIFICATION', 'UPLOAD_FILE',
+  'TAKE_SCREENSHOT', 'TAKE_PHOTO', 'RECORD_SCREEN',
+  'START_RECORDING', 'STOP_RECORDING', 'LAUNCH_APP', 'UNINSTALL_APP'
+]);
+
+const COMMAND_STATUSES = new Set(['PENDING', 'QUEUED', 'SENT', 'RECEIVED', 'EXECUTING', 'COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED']);
+
+const ALLOWED_UPLOAD_ROOTS = ['/storage/emulated/0/', '/sdcard/', '/mnt/sdcard/'];
+
+function validateCommandParameters(commandType, parameters) {
+  if (parameters && typeof parameters !== 'object') {
+    return 'parameters must be an object';
+  }
+  if (commandType === 'UPLOAD_FILE') {
+    const p = parameters?.path;
+    if (typeof p !== 'string' || p.length === 0 || p.length > 1024) {
+      return 'UPLOAD_FILE requires a valid parameters.path';
+    }
+    if (p.includes('..') || p.includes('\u0000')) {
+      return 'UPLOAD_FILE path contains illegal sequences';
+    }
+    if (!ALLOWED_UPLOAD_ROOTS.some(root => p.startsWith(root))) {
+      return `UPLOAD_FILE path must be under ${ALLOWED_UPLOAD_ROOTS[0]}`;
+    }
+  }
+  return null;
+}
+
+app.post('/api/devices/:id/commands', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
   const { commandType, parameters } = req.body;
 
-  if (!commandType) {
+  if (!commandType || typeof commandType !== 'string') {
     return res.status(400).json({ error: 'commandType required' });
   }
+  if (!ALLOWED_COMMAND_TYPES.has(commandType)) {
+    return res.status(400).json({ error: `Unknown commandType. Allowed: ${[...ALLOWED_COMMAND_TYPES].join(', ')}` });
+  }
+  const paramError = validateCommandParameters(commandType, parameters);
+  if (paramError) {
+    return res.status(400).json({ error: paramError });
+  }
 
-  const commandId = 'cmd_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const commandId = 'cmd_' + Date.now() + '_' + crypto.randomBytes(3).toString('hex');
   const now = Date.now();
 
   const command = {
@@ -1563,6 +1651,7 @@ app.post('/api/devices/:id/commands', verifyToken, async (req, res) => {
     timestamp: now
   };
 
+  // Persist BEFORE attempting delivery so offline devices can be replayed.
   if (db.isPostgres()) {
     await db.query(
       `INSERT INTO commands (id, device_id, user_id, command_type, parameters, status, timestamp)
@@ -1572,23 +1661,34 @@ app.post('/api/devices/:id/commands', verifyToken, async (req, res) => {
   } else {
     db.getMemoryStore().commands.set(commandId, {
       ...command,
+      id: commandId,
+      command_type: commandType,
       user_id: req.user.id
     });
   }
 
   logAudit(req.user.id, id, 'DISPATCH_COMMAND', { commandType, commandId }, req.ip);
 
-  // Send directly via WebSocket to device
+  // Attempt live delivery; the command stays queued if the device is offline.
   const dispatched = wsManager.sendCommandToDevice(id, command);
+  if (dispatched) {
+    if (db.isPostgres()) {
+      await db.query(`UPDATE commands SET status = 'SENT' WHERE id = $1`, [commandId]);
+    } else {
+      const cmd = db.getMemoryStore().commands.get(commandId);
+      if (cmd) cmd.status = 'SENT';
+    }
+  }
 
   res.json({
     commandId,
-    status: 'PENDING',
-    dispatchedToOnlineDevice: dispatched
+    status: dispatched ? 'SENT' : 'PENDING',
+    dispatchedToOnlineDevice: dispatched,
+    queued: !dispatched
   });
-});
+}));
 
-app.get('/api/devices/:id/commands', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/commands', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query(
@@ -1602,26 +1702,40 @@ app.get('/api/devices/:id/commands', verifyToken, async (req, res) => {
       .sort((a, b) => b.timestamp - a.timestamp);
     res.json(list);
   }
-});
+}));
 
-app.post('/api/devices/:id/commands/:commandId/status', async (req, res) => {
+// Command status updates: authenticated device OR owning user; the command
+// must belong to the device in the URL and use a known status.
+app.post('/api/devices/:id/commands/:commandId/status', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
   const { id, commandId } = req.params;
   const { status, result, errorMessage } = req.body;
+
+  if (!COMMAND_STATUSES.has(status)) {
+    return res.status(400).json({ error: 'Invalid command status' });
+  }
+
   const now = Date.now();
+  let updated = false;
 
   if (db.isPostgres()) {
-    await db.query(
+    const upd = await db.query(
       'UPDATE commands SET status = $1, result = $2, error_message = $3, completion_timestamp = $4 WHERE id = $5 AND device_id = $6',
       [status, result || null, errorMessage || null, now, commandId, id]
     );
+    updated = upd.rowCount > 0;
   } else {
     const cmd = db.getMemoryStore().commands.get(commandId);
-    if (cmd) {
+    if (cmd && (cmd.deviceId === id || cmd.device_id === id)) {
       cmd.status = status;
       cmd.result = result;
-      cmd.errorMessage = errorMessage;
+      cmd.error_message = errorMessage;
       cmd.completion_timestamp = now;
+      updated = true;
     }
+  }
+
+  if (!updated) {
+    return res.status(404).json({ error: 'Command not found for this device' });
   }
 
   wsManager.broadcastToDashboards({
@@ -1635,12 +1749,21 @@ app.post('/api/devices/:id/commands/:commandId/status', async (req, res) => {
   });
 
   res.json({ success: true });
-});
+}));
 
 // ==========================================
-// AUDIO & FILE UPLOADS
+// AUDIO & FILE UPLOADS (device-authenticated, private storage)
 // ==========================================
-app.post('/api/devices/:id/recordings', upload.single('file'), async (req, res) => {
+function handleUploadError(err, req, res, next) {
+  if (err instanceof multer.MulterError) {
+    const message = err.code === 'LIMIT_FILE_SIZE' ? 'File too large (max 25MB)' : `Upload rejected: ${err.message}`;
+    return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: message });
+  }
+  if (err) return res.status(400).json({ error: 'Upload rejected' });
+  next();
+}
+
+app.post('/api/devices/:id/recordings', ingestLimiter, deviceDataAuth, upload.single('file'), handleUploadError, ah(async (req, res) => {
   const { id } = req.params;
   const durationMs = parseInt(req.body.durationMs) || 0;
   if (!req.file) {
@@ -1672,9 +1795,9 @@ app.post('/api/devices/:id/recordings', upload.single('file'), async (req, res) 
   });
 
   res.json({ success: true, recording });
-});
+}));
 
-app.get('/api/devices/:id/recordings', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/recordings', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
   if (db.isPostgres()) {
     const result = await db.query('SELECT * FROM recordings WHERE device_id = $1 ORDER BY created_at DESC', [id]);
@@ -1682,172 +1805,193 @@ app.get('/api/devices/:id/recordings', verifyToken, async (req, res) => {
   } else {
     res.json(db.getMemoryStore().recordings.filter(r => r.device_id === id));
   }
-});
+}));
 
-// Generic file upload endpoint
-app.post('/api/devices/:id/upload-file', upload.single('file'), async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-    const webPath = `/uploads/${req.file.filename}`;
-    const targetPath = req.body.targetPath;
+// Generic file upload (device streams a file from the phone to the dashboard)
+app.post('/api/devices/:id/upload-file', ingestLimiter, deviceDataAuth, upload.single('file'), handleUploadError, ah(async (req, res) => {
+  const { id } = req.params;
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+  const webPath = `/uploads/${req.file.filename}`;
+  const targetPath = req.body.targetPath ? cleanMeta(req.body.targetPath, 1024) : null;
 
-    if (targetPath) {
+  if (targetPath && !targetPath.includes('..')) {
+    if (db.isPostgres()) {
+      await db.query(
+        'UPDATE files SET web_path = $1 WHERE device_id = $2 AND file_path = $3',
+        [webPath, id, targetPath]
+      );
+    } else {
       const filesStore = db.getMemoryStore().files;
       const fileEntry = filesStore.find(f => f.device_id === id && f.file_path === targetPath);
       if (fileEntry) {
         fileEntry.web_path = webPath;
       }
     }
-    res.json({ success: true, webPath });
-  } catch (e) {
-    console.error('Error in upload-file:', e);
-    res.status(500).json({ error: e.message });
   }
-});
+  res.json({ success: true, webPath });
+}));
+
+// Authorized download route — replaces the previous public express.static.
+// Only the owner of the referencing device may fetch an uploaded file.
+app.get('/uploads/:filename', requireUser, ah(async (req, res) => {
+  const filename = path.basename(req.params.filename); // neutralize traversal
+  const webPath = `/uploads/${filename}`;
+  const filePath = path.join(uploadsDir, filename);
+
+  if (!filePath.startsWith(uploadsDir) || !fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  let deviceId = null;
+  if (db.isPostgres()) {
+    const r = await db.query(
+      'SELECT device_id FROM files WHERE web_path = $1 UNION SELECT device_id FROM recordings WHERE file_path = $1 LIMIT 1',
+      [webPath]
+    );
+    deviceId = r.rows[0]?.device_id || null;
+  } else {
+    const store = db.getMemoryStore();
+    const fileEntry = store.files.find(f => f.web_path === webPath);
+    const recEntry = store.recordings.find(r => r.file_path === webPath);
+    deviceId = fileEntry?.device_id || recEntry?.device_id || null;
+  }
+
+  if (!deviceId) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  const dev = await findDeviceForUser(deviceId, req.user.id);
+  if (!dev) {
+    return res.status(403).json({ error: 'Not authorized to download this file' });
+  }
+
+  res.sendFile(filePath);
+}));
 
 // ==========================================
 // GEOFENCING API
 // ==========================================
-app.get('/api/devices/:id/geofences', verifyToken, async (req, res) => {
+app.get('/api/devices/:id/geofences', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
-  try {
-    if (db.isPostgres()) {
-      const result = await db.query('SELECT * FROM geofences WHERE device_id = $1 OR device_id IS NULL ORDER BY created_at DESC', [id]);
-      res.json(result.rows);
-    } else {
-      const list = (db.getMemoryStore().geofences || []).filter(g => !g.device_id || g.device_id === id);
-      res.json(list);
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  if (db.isPostgres()) {
+    const result = await db.query('SELECT * FROM geofences WHERE device_id = $1 OR device_id IS NULL ORDER BY created_at DESC', [id]);
+    res.json(result.rows);
+  } else {
+    const list = (db.getMemoryStore().geofences || []).filter(g => !g.device_id || g.device_id === id);
+    res.json(list);
   }
-});
+}));
 
-app.post('/api/devices/:id/geofences', verifyToken, async (req, res) => {
+app.post('/api/devices/:id/geofences', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id } = req.params;
   const { name, latitude, longitude, radiusMeters, isActive } = req.body;
   const rad = Number(radiusMeters) || 500;
   const active = isActive !== false;
 
-  try {
-    if (db.isPostgres()) {
-      const result = await db.query(
-        `INSERT INTO geofences (device_id, name, latitude, longitude, radius_meters, is_active, last_status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'UNKNOWN') RETURNING *`,
-        [id, name || 'Designated Zone', Number(latitude), Number(longitude), rad, active]
-      );
-      wsManager.broadcastToDashboards({
-        type: 'GEOFENCES_UPDATED',
-        deviceId: id
-      });
-      res.json({ success: true, geofence: result.rows[0] });
-    } else {
-      const item = {
-        id: Date.now(),
-        device_id: id,
-        name: name || 'Designated Zone',
-        latitude: Number(latitude),
-        longitude: Number(longitude),
-        radius_meters: rad,
-        is_active: active,
-        last_status: 'UNKNOWN',
-        created_at: new Date()
-      };
-      db.getMemoryStore().geofences.push(item);
-      wsManager.broadcastToDashboards({
-        type: 'GEOFENCES_UPDATED',
-        deviceId: id
-      });
-      res.json({ success: true, geofence: item });
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  if (!Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) {
+    return res.status(400).json({ error: 'Valid latitude and longitude required' });
   }
-});
 
-app.delete('/api/devices/:id/geofences/:geofenceId', verifyToken, async (req, res) => {
+  const item = {
+    device_id: id,
+    name: cleanMeta(name, 128) || 'Designated Zone',
+    latitude: Number(latitude),
+    longitude: Number(longitude),
+    radius_meters: rad,
+    is_active: active,
+    last_status: 'UNKNOWN'
+  };
+
+  if (db.isPostgres()) {
+    const result = await db.query(
+      `INSERT INTO geofences (device_id, name, latitude, longitude, radius_meters, is_active, last_status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'UNKNOWN') RETURNING *`,
+      [id, item.name, item.latitude, item.longitude, rad, active]
+    );
+    wsManager.broadcastToDashboards({ type: 'GEOFENCES_UPDATED', deviceId: id });
+    res.json({ success: true, geofence: result.rows[0] });
+  } else {
+    const full = { id: Date.now(), ...item, created_at: new Date() };
+    db.getMemoryStore().geofences.push(full);
+    wsManager.broadcastToDashboards({ type: 'GEOFENCES_UPDATED', deviceId: id });
+    res.json({ success: true, geofence: full });
+  }
+}));
+
+app.delete('/api/devices/:id/geofences/:geofenceId', requireUser, requireDeviceOwner, ah(async (req, res) => {
   const { id, geofenceId } = req.params;
-  try {
-    if (db.isPostgres()) {
-      await db.query('DELETE FROM geofences WHERE id = $1 AND (device_id = $2 OR device_id IS NULL)', [geofenceId, id]);
-    } else {
-      const list = db.getMemoryStore().geofences;
-      const idx = list.findIndex(g => String(g.id) === String(geofenceId));
-      if (idx !== -1) list.splice(idx, 1);
-    }
-    wsManager.broadcastToDashboards({
-      type: 'GEOFENCES_UPDATED',
-      deviceId: id
-    });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  if (db.isPostgres()) {
+    await db.query('DELETE FROM geofences WHERE id = $1 AND (device_id = $2 OR device_id IS NULL)', [geofenceId, id]);
+  } else {
+    const list = db.getMemoryStore().geofences;
+    const idx = list.findIndex(g => String(g.id) === String(geofenceId));
+    if (idx !== -1) list.splice(idx, 1);
   }
-});
+  wsManager.broadcastToDashboards({ type: 'GEOFENCES_UPDATED', deviceId: id });
+  res.json({ success: true });
+}));
 
 // ==========================================
-// DATA USAGE API
+// DATA USAGE API (device-authenticated)
 // ==========================================
-app.post('/api/devices/:id/data-usage', async (req, res) => {
+app.post('/api/devices/:id/data-usage', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
   const { id } = req.params;
   const { wifiRx, wifiTx, mobileRx, mobileTx } = req.body;
-  try {
-    if (db.isPostgres()) {
-      await db.query(
-        `INSERT INTO data_usage (device_id, wifi_bytes_rx, wifi_bytes_tx, mobile_bytes_rx, mobile_bytes_tx)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [id, wifiRx || 0, wifiTx || 0, mobileRx || 0, mobileTx || 0]
-      );
-    } else {
-      db.getMemoryStore().data_usage.unshift({
-        device_id: id,
-        wifi_bytes_rx: wifiRx || 0,
-        wifi_bytes_tx: wifiTx || 0,
-        mobile_bytes_rx: mobileRx || 0,
-        mobile_bytes_tx: mobileTx || 0,
-        recorded_at: new Date()
-      });
-    }
-    wsManager.broadcastToDashboards({
-      type: 'DATA_USAGE_UPDATED',
-      deviceId: id,
-      dataUsage: { wifiRx, wifiTx, mobileRx, mobileTx }
+  if (db.isPostgres()) {
+    await db.query(
+      `INSERT INTO data_usage (device_id, wifi_bytes_rx, wifi_bytes_tx, mobile_bytes_rx, mobile_bytes_tx)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [id, asInt(wifiRx, 0), asInt(wifiTx, 0), asInt(mobileRx, 0), asInt(mobileTx, 0)]
+    );
+  } else {
+    db.getMemoryStore().data_usage.unshift({
+      device_id: id,
+      wifi_bytes_rx: asInt(wifiRx, 0),
+      wifi_bytes_tx: asInt(wifiTx, 0),
+      mobile_bytes_rx: asInt(mobileRx, 0),
+      mobile_bytes_tx: asInt(mobileTx, 0),
+      recorded_at: new Date()
     });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
-});
-
-app.get('/api/devices/:id/data-usage', verifyToken, async (req, res) => {
-  const { id } = req.params;
-  try {
-    if (db.isPostgres()) {
-      const result = await db.query('SELECT * FROM data_usage WHERE device_id = $1 ORDER BY recorded_at DESC LIMIT 30', [id]);
-      res.json(result.rows);
-    } else {
-      const list = (db.getMemoryStore().data_usage || []).filter(d => d.device_id === id).slice(0, 30);
-      res.json(list);
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================================
-// SERVICE HEALTH API
-// ==========================================
-app.post('/api/devices/:id/service-health', async (req, res) => {
-  const { id } = req.params;
-  const health = req.body; // { notificationMonitor, locationService, telemetryCollector, usageTracker, webSocket, foregroundService, lastSync }
-  
-  db.getMemoryStore().service_health.set(id, {
-    ...health,
-    updatedAt: new Date()
+  wsManager.broadcastToDashboards({
+    type: 'DATA_USAGE_UPDATED',
+    deviceId: id,
+    dataUsage: { wifiRx, wifiTx, mobileRx, mobileTx }
   });
+  res.json({ success: true });
+}));
+
+app.get('/api/devices/:id/data-usage', requireUser, requireDeviceOwner, ah(async (req, res) => {
+  const { id } = req.params;
+  if (db.isPostgres()) {
+    const result = await db.query('SELECT * FROM data_usage WHERE device_id = $1 ORDER BY recorded_at DESC LIMIT 30', [id]);
+    res.json(result.rows);
+  } else {
+    const list = (db.getMemoryStore().data_usage || []).filter(d => d.device_id === id).slice(0, 30);
+    res.json(list);
+  }
+}));
+
+// ==========================================
+// SERVICE HEALTH API (device-authenticated; persisted in PG too)
+// ==========================================
+app.post('/api/devices/:id/service-health', ingestLimiter, deviceDataAuth, ah(async (req, res) => {
+  const { id } = req.params;
+  const health = req.body || {};
+
+  if (db.isPostgres()) {
+    await db.query(
+      `INSERT INTO service_health (device_id, payload, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP)
+       ON CONFLICT (device_id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = CURRENT_TIMESTAMP`,
+      [id, JSON.stringify(health)]
+    );
+  } else {
+    db.getMemoryStore().service_health.set(id, {
+      ...health,
+      updatedAt: new Date()
+    });
+  }
 
   wsManager.broadcastToDashboards({
     type: 'SERVICE_HEALTH_UPDATED',
@@ -1856,45 +2000,64 @@ app.post('/api/devices/:id/service-health', async (req, res) => {
   });
 
   res.json({ success: true });
-});
+}));
 
-app.get('/api/devices/:id/service-health', verifyToken, async (req, res) => {
+const serviceHealthGet = ah(async (req, res) => {
   const { id } = req.params;
-  const health = db.getMemoryStore().service_health.get(id) || {
-    notificationMonitor: 'RUNNING',
-    locationService: 'RUNNING',
-    telemetryCollector: 'RUNNING',
-    usageTracker: 'RUNNING',
-    webSocket: 'RUNNING',
-    foregroundService: 'RUNNING',
-    updatedAt: new Date()
+  let health;
+  if (db.isPostgres()) {
+    const result = await db.query('SELECT payload, updated_at FROM service_health WHERE device_id = $1', [id]);
+    health = result.rows[0] ? { ...result.rows[0].payload, updatedAt: result.rows[0].updated_at } : null;
+  } else {
+    health = db.getMemoryStore().service_health.get(id) || null;
+  }
+
+  health = health || {
+    notificationMonitor: 'UNKNOWN',
+    locationService: 'UNKNOWN',
+    telemetryCollector: 'UNKNOWN',
+    usageTracker: 'UNKNOWN',
+    webSocket: 'UNKNOWN',
+    foregroundService: 'UNKNOWN',
+    updatedAt: null
   };
-  res.json(health);
+
+  // Distinct, truthful connection facts for the dashboard.
+  res.json({
+    ...health,
+    deviceConnected: wsManager.deviceSockets.has(id),
+    deviceStatus: req.deviceRecord?.status || 'UNKNOWN',
+    lastSeen: req.deviceRecord?.last_seen || null
+  });
 });
 
+app.get('/api/devices/:id/service-health', requireUser, requireDeviceOwner, serviceHealthGet);
+// Alias for the endpoint the dashboard historically called (F-15).
+app.get('/api/devices/:id/health', requireUser, requireDeviceOwner, serviceHealthGet);
+
 // ==========================================
-// AUDIT & ALERTS
+// AUDIT & ALERTS (scoped to the requesting user)
 // ==========================================
-app.get('/api/audit', verifyToken, async (req, res) => {
+app.get('/api/audit', requireUser, ah(async (req, res) => {
   if (db.isPostgres()) {
-    const result = await db.query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 100');
+    const result = await db.query('SELECT * FROM audit_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100', [req.user.id]);
     res.json(result.rows);
   } else {
-    res.json(db.getMemoryStore().audit_logs.slice(0, 100));
+    res.json(db.getMemoryStore().audit_logs.filter(l => String(l.user_id) === String(req.user.id)).slice(0, 100));
   }
-});
+}));
 
-app.post('/api/devices/:id/alerts', verifyToken, async (req, res) => {
+app.post('/api/devices/:id/alerts', deviceDataAuth, ah(async (req, res) => {
   const { id } = req.params;
-  const { alertType, severity, title, message } = req.body;
-  
+  const { alertType, severity, title, message } = req.body || {};
+
   const alertItem = {
     id: Date.now(),
     device_id: id,
-    alert_type: alertType || 'SECURITY_ALERT',
-    severity: severity || 'WARNING',
-    title: title || 'System Alert',
-    message: message || 'Alert triggered',
+    alert_type: cleanMeta(alertType, 100) || 'SECURITY_ALERT',
+    severity: cleanMeta(severity, 20) || 'WARNING',
+    title: cleanMeta(title, 255) || 'System Alert',
+    message: cleanMeta(message, 1000) || 'Alert triggered',
     created_at: new Date()
   };
 
@@ -1915,20 +2078,31 @@ app.post('/api/devices/:id/alerts', verifyToken, async (req, res) => {
   });
 
   res.json({ success: true, alert: alertItem });
-});
+}));
 
-app.get('/api/alerts', verifyToken, async (req, res) => {
+app.get('/api/alerts', requireUser, ah(async (req, res) => {
   if (db.isPostgres()) {
-    const result = await db.query('SELECT * FROM alerts ORDER BY created_at DESC LIMIT 50');
+    const result = await db.query(
+      `SELECT a.* FROM alerts a
+       JOIN devices d ON d.id = a.device_id
+       WHERE d.user_id = $1
+       ORDER BY a.created_at DESC LIMIT 50`,
+      [req.user.id]
+    );
     res.json(result.rows);
   } else {
-    res.json(db.getMemoryStore().alerts.slice(0, 50));
+    const owned = new Set(
+      Array.from(db.getMemoryStore().devices.values())
+        .filter(d => String(d.user_id) === String(req.user.id))
+        .map(d => d.id)
+    );
+    res.json(db.getMemoryStore().alerts.filter(a => owned.has(a.device_id)).slice(0, 50));
   }
-});
+}));
 
 // Catch-all for single-page application routing and API 404s
 app.use((req, res, next) => {
-  const isApiRequest = 
+  const isApiRequest =
     req.path.startsWith('/api') ||
     req.path.startsWith('/v1') ||
     req.path.startsWith('/uploads') ||
@@ -1958,15 +2132,17 @@ app.use((req, res, next) => {
 
 // Global Express Error Handler to ensure API errors always return JSON
 app.use((err, req, res, next) => {
-  console.error('[Server Error]', err);
+  console.error('[Server Error]', err.message);
+  const message = process.env.NODE_ENV === 'production' ? 'Internal Server Error' : (err.message || 'Internal Server Error');
   res.status(err.status || 500).json({
     success: false,
-    error: err.message || 'Internal Server Error'
+    error: message
   });
 });
 
 // Start Server
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Device Management Backend running on http://0.0.0.0:${PORT}`);
-  console.log(`WebSocket endpoints: ws://0.0.0.0:${PORT}/ws/device & ws://0.0.0.0:${PORT}/ws/dashboard`);
+  const boundPort = server.address().port;
+  console.log(`Device Management Backend running on http://0.0.0.0:${boundPort}`);
+  console.log(`WebSocket endpoints: ws://0.0.0.0:${boundPort}/ws/device & ws://0.0.0.0:${boundPort}/ws/dashboard`);
 });

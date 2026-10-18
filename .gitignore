@@ -16,3 +16,17 @@
 local.properties
 .env
 debug.keystore
+
+# Dependencies
+node_modules/
+
+# Runtime data / uploaded content (never commit user data)
+server/uploads/
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Local env files
+.env.*
+!.env.example

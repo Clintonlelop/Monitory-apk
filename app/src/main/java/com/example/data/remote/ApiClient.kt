@@ -36,8 +36,15 @@ class ApiClient(private val preferenceManager: PreferenceManager) {
         .build()
 
     val okHttpClient: OkHttpClient by lazy {
+        // Sensitive HTTP bodies (tokens, SMS/notification/call content) must
+        // never reach logcat in release builds. Debug logs are redacted.
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (com.example.BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BASIC
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
+            redactHeader("Authorization")
         }
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)

@@ -1,6 +1,6 @@
 # Android Device Management & Monitoring System
 
-A complete, production-ready, fully transparent Android Device Management agent and full-stack administrative infrastructure built with modern Kotlin, Jetpack Compose, Node.js, WebSockets, PostgreSQL, and an interactive Web Admin Dashboard.
+An Android Device Management agent and full-stack administrative infrastructure built with Kotlin, Jetpack Compose, Node.js, WebSockets, PostgreSQL (or an embedded development store), and an interactive Web Admin Dashboard. Review `AUDIT_REPORT.md` and the security notes below before deploying — this system handles highly sensitive data (SMS, call logs, recordings, location) and must only be used on devices you own or administer with informed consent.
 
 ---
 
@@ -48,21 +48,47 @@ A complete, production-ready, fully transparent Android Device Management agent 
 
 #### Option A: Docker Compose (PostgreSQL + Backend)
 ```bash
+cp .env.example .env
+# Generate a JWT secret and set it (plus POSTGRES_PASSWORD) in .env:
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 docker-compose up -d
 ```
-The Web Dashboard is now available at `http://localhost:8080`.
+The Web Dashboard is available at `http://localhost:8080`.
 
-#### Option B: Standalone Node.js (Zero external dependencies)
-The backend features an integrated embedded data engine that runs immediately without requiring PostgreSQL to be pre-installed:
+#### Option B: Standalone Node.js (zero external dependencies)
+The backend includes an embedded in-memory store for development (all data is
+lost on restart — use PostgreSQL for anything real):
 ```bash
 cd server
 npm install
-npm start
+JWT_SECRET=$(node -e "console.log(require('crypto').randomBytes(48).toString('hex'))") npm start
 ```
-Open `http://localhost:8080` in your browser.
+Open `http://localhost:3000` in your browser (or set `PORT`).
 
-- **Default Administrator:** `admin@devicemanager.local`
-- **Default Password:** `admin`
+#### First administrator (fresh install)
+There are **no default accounts**. On a fresh instance, either:
+
+1. Set `ADMIN_EMAIL` / `ADMIN_PASSWORD` (and optional `ADMIN_USERNAME`) in `.env`
+   before boot, or
+2. Call the one-time bootstrap endpoint while the users table is empty:
+   ```bash
+   curl -X POST http://localhost:3000/api/auth/bootstrap \
+     -H 'Content-Type: application/json' \
+     -d '{"username":"admin","email":"you@example.com","password":"a-strong-password"}'
+   ```
+
+The bootstrap endpoint disables itself as soon as one account exists. If you are
+migrating a deployment that used the old `admin/admin` accounts: those accounts
+still exist in your database — reset their passwords via SQL
+(`UPDATE users SET password_hash = '<new bcrypt hash>' WHERE email = '...';`)
+or create a new account and transfer device ownership (`UPDATE devices SET user_id = ...`).
+
+#### Secret rotation (existing deployments)
+Treat every previously committed secret as compromised and rotate it:
+`JWT_SECRET` (from `docker-compose.yml` / old `.env`), the default account
+passwords, and the Android debug keystore that was embedded in `codemagic.yaml`.
+After changing `JWT_SECRET`, all issued tokens (user and device) become invalid
+and devices must re-pair.
 
 ---
 

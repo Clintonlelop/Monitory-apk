@@ -48,6 +48,23 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 
+
+/**
+ * UPLOAD_FILE may only retrieve shared user storage (defense in depth — the
+ * server enforces the same policy). App-private data, system paths, and
+ * traversal attempts are refused.
+ */
+internal fun isAllowedUploadPath(path: String): Boolean {
+    if (path.isBlank() || path.length > 1024) return false
+    if (path.contains("..") || path.contains('\u0000')) return false
+    val allowedRoots = listOf(
+        "/storage/emulated/0/",
+        "/sdcard/",
+        "/mnt/sdcard/"
+    )
+    return allowedRoots.any { path.startsWith(it) }
+}
+
 class DeviceRepository(
     private val context: Context,
     private val database: AppDatabase,
@@ -819,7 +836,7 @@ class DeviceRepository(
                             out.close()
                             
                             syncFilesList()
-                            reportCommandSuccess(command.commandId, "System Screenshot captured as ${file.name} and synced to library")
+                            reportCommandSuccess(command.commandId, "[DEMO] Synthetic diagnostic image written as ${file.name} — real screenshot capture is not implemented")
                         } else {
                             reportCommandFailure(command.commandId, "Storage directory unavailable")
                         }
@@ -872,7 +889,7 @@ class DeviceRepository(
                             out.close()
                             
                             syncFilesList()
-                            reportCommandSuccess(command.commandId, "Lens Photo captured as ${file.name} and synced")
+                            reportCommandSuccess(command.commandId, "[DEMO] Synthetic sample image written as ${file.name} — real camera capture is not implemented")
                         } else {
                             reportCommandFailure(command.commandId, "Storage directory unavailable")
                         }
@@ -901,7 +918,7 @@ class DeviceRepository(
                             out.close()
                             
                             syncFilesList()
-                            reportCommandSuccess(command.commandId, "Screen video clip recorded as ${file.name} (5.4s duration) and synced")
+                            reportCommandSuccess(command.commandId, "[DEMO] Synthetic sample clip written as ${file.name} — real screen capture is not implemented")
                         } else {
                             reportCommandFailure(command.commandId, "Storage directory unavailable")
                         }
@@ -912,7 +929,7 @@ class DeviceRepository(
                 "UPLOAD_FILE" -> {
                     try {
                         val path = command.parameters?.get("path")
-                        if (path != null) {
+                        if (path != null && isAllowedUploadPath(path)) {
                             val file = java.io.File(path)
                             if (file.exists() && file.isFile) {
                                 val ok = uploadGenericFile(file, path)
@@ -925,7 +942,7 @@ class DeviceRepository(
                                 reportCommandFailure(command.commandId, "File does not exist or is a directory: $path")
                             }
                         } else {
-                            reportCommandFailure(command.commandId, "Missing path parameter")
+                            reportCommandFailure(command.commandId, "Missing or disallowed path parameter (only shared user storage can be retrieved)")
                         }
                     } catch (e: Exception) {
                         reportCommandFailure(command.commandId, "File upload failed: ${e.message}")

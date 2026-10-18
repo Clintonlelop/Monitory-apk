@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS pairing_codes (
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     used BOOLEAN DEFAULT FALSE,
+    attempts INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -118,6 +119,7 @@ CREATE TABLE IF NOT EXISTS files (
     file_size BIGINT NOT NULL,
     mime_type VARCHAR(100),
     is_directory BOOLEAN DEFAULT FALSE,
+    web_path TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -148,11 +150,19 @@ CREATE INDEX IF NOT EXISTS idx_commands_device ON commands(device_id, timestamp 
 CREATE TABLE IF NOT EXISTS alerts (
     id BIGSERIAL PRIMARY KEY,
     device_id VARCHAR(100) REFERENCES devices(id) ON DELETE CASCADE,
-    type VARCHAR(100) NOT NULL, -- 'OFFLINE', 'LOW_BATTERY', 'PERMISSION_REVOKED', 'STORAGE_FULL'
+    alert_type VARCHAR(100) NOT NULL, -- 'OFFLINE', 'LOW_BATTERY', 'PERMISSION_REVOKED', 'STORAGE_FULL', 'GEOFENCE_ENTERED'...
+    title TEXT,
     message TEXT NOT NULL,
     severity VARCHAR(20) DEFAULT 'INFO', -- 'INFO', 'WARNING', 'CRITICAL'
     acknowledged BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Service health reports from device agents (persisted; previously memory-only)
+CREATE TABLE IF NOT EXISTS service_health (
+    device_id VARCHAR(100) PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (

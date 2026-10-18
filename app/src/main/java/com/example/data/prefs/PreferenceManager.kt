@@ -140,7 +140,10 @@ class PreferenceManager(context: Context) {
     }
 
     companion object {
-        const val DEFAULT_SERVER_URL = "https://ais-dev-iga3y2yico5lrw2r2s77lh-77493896896.europe-west3.run.app"
+        // No baked-in deployment URL: the server address is entered by the
+        // user / delivered via the pairing QR payload. An empty default avoids
+        // silently sending device data to a third-party host.
+        const val DEFAULT_SERVER_URL = ""
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_USER_EMAIL = "user_email"
         private const val KEY_USER_TOKEN = "user_token"
