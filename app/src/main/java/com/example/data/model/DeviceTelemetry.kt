@@ -119,7 +119,11 @@ data class DevicePermissionsStatus(
     val contacts: Boolean = false,
     val calls: Boolean = false,
     val sms: Boolean = false,
-    val accessibility: Boolean = false
+    val accessibility: Boolean = false,
+    val mediaRead: Boolean = false,
+    val allFilesAccess: Boolean = false,
+    val deviceAdmin: Boolean = false,
+    val deviceOwner: Boolean = false
 )
 
 @JsonClass(generateAdapter = true)

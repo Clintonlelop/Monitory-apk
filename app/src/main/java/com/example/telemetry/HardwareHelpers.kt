@@ -29,7 +29,11 @@ class PermissionsHelper(private val context: Context) {
             contacts = isContactsGranted(),
             calls = isCallsGranted(),
             sms = isSmsGranted(),
-            accessibility = isAccessibilityEnabled()
+            accessibility = isAccessibilityEnabled(),
+            mediaRead = isMediaReadGranted(),
+            allFilesAccess = isAllFilesAccessGranted(),
+            deviceAdmin = isDeviceAdminGranted(),
+            deviceOwner = isDeviceOwner()
         )
     }
 
@@ -69,15 +73,47 @@ class PermissionsHelper(private val context: Context) {
         return packages.contains(context.packageName)
     }
 
-    fun isStorageGranted(): Boolean {
+    /** Android 11+ "All files access" (MANAGE_EXTERNAL_STORAGE). */
+    fun isAllFilesAccessGranted(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.os.Environment.isExternalStorageManager()
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        } else {
+            true // Below Android 11 the runtime storage permission is enough
+        }
+    }
+
+    /** Android 13+ "Media read" (READ_MEDIA_*), or READ_EXTERNAL_STORAGE below. */
+    fun isMediaReadGranted(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
         } else {
             @Suppress("DEPRECATION")
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun isStorageGranted(): Boolean {
+        // Storage browsing/file sync works with EITHER all-files access OR media read.
+        return isAllFilesAccessGranted() || isMediaReadGranted()
+    }
+
+    fun isDeviceAdminGranted(): Boolean {
+        return try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+            dpm?.isAdminActive(com.example.service.AppDeviceAdminReceiver.component(context)) == true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun isDeviceOwner(): Boolean {
+        return try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+            dpm?.isDeviceOwnerApp(context.packageName) == true
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -128,6 +164,44 @@ class PermissionsHelper(private val context: Context) {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
         context.startActivity(intent)
+    }
+
+    /** Opens the system "All files access" page for this app (Android 11+). */
+    fun openAllFilesAccessSettings() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+            } else {
+                openAppSettings()
+            }
+        } catch (e: Exception) {
+            try {
+                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+            } catch (_: Exception) {
+                openAppSettings()
+            }
+        }
+    }
+
+    /** Intent that opens the device-admin activation dialog for this app. */
+    fun buildDeviceAdminIntent(): Intent {
+        return Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+            putExtra(
+                android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN,
+                com.example.service.AppDeviceAdminReceiver.component(context)
+            )
+            putExtra(
+                android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                "Allows the authorized device owner to apply remote policies (e.g. lock screen) from the management dashboard."
+            )
+        }
     }
 
     fun openAccessibilitySettings() {

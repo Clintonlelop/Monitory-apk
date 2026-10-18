@@ -640,7 +640,7 @@ fun StepAccessibility(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "1. Click 'Enable Accessibility Service' below to open Settings.\n2. Find 'Device Integrity Assistant'.\n3. Turn the switch to ON. To disable, follow same steps and turn OFF.",
+                    text = "1. Click 'Enable Accessibility Service' below to open Settings.\n2. Find 'Monitory Screen Text Monitor'.\n3. Turn the switch to ON. To disable, follow same steps and turn OFF.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

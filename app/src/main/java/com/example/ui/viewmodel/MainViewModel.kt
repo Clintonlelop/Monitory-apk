@@ -21,6 +21,7 @@ sealed class Screen {
     data object Pairing : Screen()
     data object Dashboard : Screen()
     data object Privacy : Screen()
+    data object Storage : Screen()
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Policies used when the user explicitly activates this app as device admin
+     from the Android system dialog. Only remote lock / wipe-type policies are
+     declared; each use still requires the admin to be active. -->
+<device-admin>
+    <uses-policies>
+        <force-lock />
+        <wipe-data />
+    </uses-policies>
+</device-admin>
